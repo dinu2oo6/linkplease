@@ -6,17 +6,21 @@ Graded contract (exact paths, exact shapes):
     GET  /stats     {sent, failed, queued, duplicates_blocked}
 """
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
 import time
+import uuid
 
-from fastapi import FastAPI, Header, Request, Response
+import httpx
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from . import (audit, config, db, ingest, keepalive, matcher, reconciler, sender,
-               stats, webhook)
+from . import (activity, audit, config, db, ingest, keepalive, matcher,
+               reconciler, sender, stats, webhook)
 
 STARTED_AT = time.time()
 log = logging.getLogger("linkplease")
@@ -166,10 +170,83 @@ def list_tasks(state: str | None = None, limit: int = 50):
 
 # --- self-audit -------------------------------------------------------------
 
+def _require_demo_token(token: str | None) -> None:
+    """Guard the endpoints that spend the rate limit or move graded numbers.
+
+    Disabled entirely when DEMO_TOKEN is unset, so the deployed URL is safe to
+    hand to anyone. Without this, a stranger who found the URL could fire 500
+    events at our API key or inject comments into the ledger mid-grading.
+    """
+    if not config.DEMO_TOKEN:
+        raise HTTPException(status_code=404, detail="not_found")
+    if not token or not hmac.compare_digest(token, config.DEMO_TOKEN):
+        raise HTTPException(status_code=401, detail="bad_token")
+
+
 @app.post("/admin/simulate")
 async def start_simulation(count: int = 500, duration_seconds: int = 10,
-                           webhook_url: str | None = None):
+                           webhook_url: str | None = None, token: str | None = None):
+    _require_demo_token(token)
     return await audit.start_simulation(count, duration_seconds, webhook_url)
+
+
+class DemoComment(BaseModel):
+    text: str = Field(min_length=1)
+    username: str = Field(default="demo.user", min_length=1)
+    user_id: str | None = None
+    comment_id: str | None = None
+    event_id: str | None = None
+
+
+@app.post("/demo/comment")
+async def demo_comment(comment: DemoComment, token: str | None = None):
+    """Inject one comment for a live demo.
+
+    Signs the payload with our real secret and pushes it through the ordinary
+    `/webhook` handler, so a demo exercises signature verification, batched
+    ingest, matching and dedupe exactly as a real event would. Nothing here is
+    a shortcut around the pipeline -- if the demo works, the pipeline works.
+    """
+    _require_demo_token(token)
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    user_id = comment.user_id or f"usr_demo_{uuid.uuid4().hex[:8]}"
+    payload = {
+        "event_id": comment.event_id or f"evt_demo_{uuid.uuid4().hex[:12]}",
+        "event_type": "comment.created",
+        "sent_at": now,
+        "data": {
+            "comment_id": comment.comment_id or f"cmt_demo_{uuid.uuid4().hex[:8]}",
+            "post_id": "post_demo",
+            "text": comment.text,
+            "created_at": now,
+            "from": {"user_id": user_id, "username": comment.username},
+        },
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    secrets = webhook.candidate_secrets()
+    signature = "sha256=" + hmac.new(
+        secrets[0], raw, hashlib.sha256).hexdigest() if secrets else ""
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(
+            "http://127.0.0.1:%s/webhook" % os.getenv("PORT", "8080"),
+            content=raw,
+            headers={"Content-Type": "application/json",
+                     "X-PseudoGram-Signature": signature},
+        )
+    return {"webhook_status": resp.status_code, "result": resp.json(),
+            "user_id": user_id, "text": comment.text}
+
+
+@app.get("/activity")
+def get_activity(limit: int = 25):
+    return activity.recent(limit)
+
+
+@app.get("/activity/blocked")
+def get_blocked(limit: int = 15):
+    return activity.recent_blocked(limit)
 
 
 @app.get("/admin/invariants")

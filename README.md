@@ -130,13 +130,33 @@ python scripts/apply_and_keygen.py --name "..." --email you@example.com \
 ## Testing it
 
 ```bash
-.venv/bin/python -m pytest          # 52 tests, ~2s
+.venv/bin/python -m pytest          # 65 tests, ~7s, on SQLite
+
+# and against real Postgres -- production runs a dialect SQLite never executes
+TEST_DATABASE_URL="postgresql://.../linkplease_test" pytest
 ```
 
-Covers the concurrent-dedupe race, forged and mismatched signatures, delete
-before create, `400` never retried, `429` not consuming an attempt, a `500` that
-secretly created the DM anyway, resend under a fresh key, crash recovery of
-in-flight tasks, and the governor holding under a compressed-clock run.
+The Postgres run **must** use a different database from the deployed one. The
+suite truncates every table before every test, and `conftest.py` refuses to
+start if the two database names match — a guard that exists because I once
+pointed it at production mid-run and destroyed the ledger
+([FAILURES.md](FAILURES.md) #13).
+
+Covers the concurrent-dedupe race, forged and mismatched signatures, signatures
+signed with the decoded key prefix, delete before create, `4xx` never retried,
+`429` not consuming an attempt, a `500` that secretly created the DM anyway,
+resend under a fresh key, crash recovery of in-flight tasks, same-batch
+redelivery, 16-way concurrent slot reservation, and the alarm that fires when
+every request is being rejected.
+
+### One gotcha worth knowing before you run this yourself
+
+**The documented HMAC secret is wrong.** The brief says to sign with your API
+key. Real signatures verify against the *base64 half of the key, decoded* —
+which is your account email. Implementing Part B exactly as written rejects
+every event with `401` and reports four perfectly honest zeroes.
+`webhook.candidate_secrets()` accepts either, so this keeps working whichever
+way they meant it.
 
 ### The chaos server
 

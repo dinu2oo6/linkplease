@@ -102,7 +102,40 @@ so two instances still *pace* independently. They can no longer exceed the
 window, but they will bunch sends toward the start of it rather than spreading
 them evenly. Pacing is a politeness optimisation now, not the safety mechanism.
 
-### 4. A crash between PseudoGram receiving a send and my writing the `dm_id` is only safe if their idempotency cache outlives my downtime
+### 4. A correct matcher with the wrong keyword is indistinguishable from a broken matcher
+
+The first clean audit against the real truth file said we owed 96 recipients and
+had DMed 91. Five missing, no false positives, everything else exact.
+
+All five had commented **"pricing please"**, and my rule keyword was `PRICE`.
+`"price"` is not a substring of `"pricing"` — `pric-e` versus `pric-i-ng`. The
+matcher was doing precisely what the brief specifies (case-insensitive substring,
+anywhere in the text) and was not wrong by a single character. The *rule* was too
+narrow.
+
+I only caught it because the audit compares against their expected recipient set
+rather than against my own idea of what should have matched. Every internal
+number was self-consistent: 91 obligations, 91 delivered, 0 failed, 0 queued,
+duplicates reconciling exactly. A system that never sees the events it should
+have matched cannot tell you it missed them.
+
+Reverse-engineering their generator from the stored events showed 8 trigger
+phrases, of which `pricing please` was the only one `price` misses. The stem
+`pric` matches all 96 expected recipients with zero false positives, so the
+deployed rule is now `pric`.
+
+**Why one stem rather than two rules:** `PRICE` plus `pricing` would DM anyone who
+said both phrases twice — once per rule, since the guarantee is one DM per rule
+per person. One rule on the stem is the only configuration that covers the
+audience without double-messaging part of it.
+
+**What's still fragile:** `pric` is tuned to one observed run. A comment saying
+"priceless" matches and gets a price list, which is a false positive nobody
+audited for. More generally, keyword quality is a product decision the system
+can't validate — it will faithfully deliver the wrong rule to the wrong people
+forever, and every number it reports will look perfect while it does.
+
+### 5. A crash between PseudoGram receiving a send and my writing the `dm_id` is only safe if their idempotency cache outlives my downtime
 
 The sequence is: mark `in_flight` → POST → write `dm_id`. If the process dies
 between the POST arriving at PseudoGram and my writing the response, the task is
@@ -117,7 +150,7 @@ shorter than my restart time, that DM goes out twice and neither my numbers nor
 theirs would show it as a duplicate — it would look like one send from each of
 two attempts.
 
-### 5. A `comment.deleted` arriving while the send is in flight is ignored
+### 6. A `comment.deleted` arriving while the send is in flight is ignored
 
 Deletes cancel tasks in state `queued` only. Once a task is claimed it is
 `in_flight` for the duration of one HTTP request (up to the 15s timeout), and a
@@ -129,7 +162,7 @@ wait, and is only `in_flight` for the request itself.
 **Conditions:** delete arrives within the ~50–300ms of an in-flight POST.
 *(chaos)* not observed in a 567-delivery run, but the window is real.
 
-### 6. Deleting the *first* comment cancels a DM that a later comment still justifies
+### 7. Deleting the *first* comment cancels a DM that a later comment still justifies
 
 A task records the `comment_id` that created it. If someone comments "PRICE"
 twice and deletes only the first, the delete cancels the pending DM even though
@@ -140,7 +173,7 @@ correct. I picked per-comment cancellation because tracking "does any live
 comment still justify this obligation" means re-deriving the whole match set on
 every delete, and the wrong-direction case is rarer than the right one.
 
-### 7. Rules created after an event arrives never apply to it
+### 8. Rules created after an event arrives never apply to it
 
 Events are matched once per delivery and then marked processed. Create a rule at
 10:05 and the comment that arrived at 10:04 is never re-evaluated, so that person
@@ -150,7 +183,7 @@ This is the correct behaviour for a live system and the wrong behaviour for
 anyone who sets up their rules after pointing the webhook at us. `run_sim.py`
 creates rules before starting a simulation for exactly this reason.
 
-### 8. Terminal failures are terminal — there is no requeue
+### 9. Terminal failures are terminal — there is no requeue
 
 After 6 send attempts or 3 resends a DM is `failed` and nothing ever retries it.
 If PseudoGram is down for ten minutes, everything that cycles through its
@@ -158,7 +191,7 @@ attempts in that window is permanently lost, and `/stats` will honestly report
 them as `failed` forever. There is no admin endpoint to push them back into the
 queue, which is the first thing I'd add.
 
-### 9. `duplicates_blocked` is my definition of "duplicate", which may not be theirs
+### 10. `duplicates_blocked` is my definition of "duplicate", which may not be theirs
 
 I count one per match evaluation that did not create a new obligation — covering
 both redelivered `event_id`s and the same person commenting again. A duplicate
@@ -187,14 +220,14 @@ looked exactly like a bug in the system. `GET /audit/{run_id}` now reports the
 band plus the three checks that *are* exact regardless of timing: no event lost,
 no pair with a surviving comment left un-DMed, no DM invented from nothing.
 
-### 10. `sent` lags reality by up to one reconcile interval, always downward
+### 11. `sent` lags reality by up to one reconcile interval, always downward
 
 A DM PseudoGram has already delivered counts as `queued` until my reconciler
 polls it (every 5s, 40 at a time). Under a large backlog that lag grows: 300
 accepted DMs take ~40s to sweep. `sent` therefore understates and never
 overstates, which is the direction I want to be wrong in.
 
-### 11. Durability is only as good as the filesystem underneath it
+### 12. Durability is only as good as the filesystem underneath it
 
 This one started as a real defect and I fixed it while writing this file. I had
 `PRAGMA synchronous=NORMAL`, which in WAL mode is durable against process death —
@@ -214,7 +247,7 @@ about for one I have to take on trust — which is the usual trade when you move
 onto managed infrastructure, and worth naming rather than treating as a
 resolution.
 
-### 12. The test suite and production run on different databases
+### 13. The test suite and production run on different databases
 
 Tests run against SQLite. Production runs against Postgres. That is a real gap:
 54 passing tests prove the logic on a dialect the deployed system doesn't use.
@@ -231,7 +264,7 @@ I run the suite against the real Neon database before deploying, which closes
 most of this. What it doesn't close: the tests exercise one writer, and Postgres
 under genuine concurrency has isolation semantics SQLite simply doesn't have.
 
-### 13. I destroyed the production ledger with my own test suite
+### 14. I destroyed the production ledger with my own test suite
 
 Mid-drain, with 87 of 97 DMs delivered, I ran the test suite with
 `TEST_DATABASE_URL` set to the production connection string to check the
@@ -259,7 +292,7 @@ database itself, no backup, and nothing that would let me undo it. A real system
 would have the credentials for the deployed database simply not be present in a
 developer shell.
 
-### 14. Render's free tier suspends the service, and the fix is a hack
+### 15. Render's free tier suspends the service, and the fix is a hack
 
 Render stops a free service after ~15 minutes with no inbound HTTP. Background
 work doesn't count, so a 30-minute drain — which by definition receives no
@@ -279,7 +312,7 @@ honest limits:
 On a host with a persistent disk and no idle suspension this file doesn't exist.
 That's what `fly.toml` is for.
 
-### 15. Neon drops idle connections, and the ledger is one connection
+### 16. Neon drops idle connections, and the ledger is one connection
 
 The Postgres connection is a pool of one, because the rate governor and the
 outbox claim are only correct with a single writer. Neon closes idle
@@ -295,26 +328,26 @@ crash, but it also does not make progress until Neon comes back.
 Neon's free tier also suspends a project after ~5 minutes idle. Wake-up is
 ~500ms, which the driver absorbs as a slow query.
 
-### 16. One database, no backups
+### 17. One database, no backups
 
 The entire ledger is one Neon project on the free tier. If it's lost, every
 pending DM and every stat goes with it. No backups, no replica, nothing in the
 design guards against it.
 
-### 17. If my API key is rotated, every webhook is rejected and the events are gone
+### 18. If my API key is rotated, every webhook is rejected and the events are gone
 
 The key is the HMAC secret. A rotated key means every signature fails, `/webhook`
 returns 401, and PseudoGram records a delivered-and-rejected response. Those
 events are never retried and never appear in my ledger, so my numbers would look
 *perfect* while I received nothing. A silent, invisible total failure.
 
-### 18. `/rules` and `/admin/simulate` have no authentication
+### 19. `/rules` and `/admin/simulate` have no authentication
 
 Anyone who finds the deployed URL can create rules that DM strangers on my key's
 behalf, or start a 500-event simulation against my rate limit. For an assignment
 with an unlisted URL this is a considered omission; in production it's a hole.
 
-### 19. The live API's contract differs from its documentation, and I only found the differences I went looking for
+### 20. The live API's contract differs from its documentation, and I only found the differences I went looking for
 
 I built the retry policy from the spec, then probed the real endpoint with my key
 before deploying. Three things did not match:
@@ -337,7 +370,7 @@ other divergences I haven't hit, because I only probed the paths I thought to
 probe. Anything the API does that I didn't test, I have handled according to a
 document that has already been wrong three times out of three.
 
-### 20. The tables grow forever
+### 21. The tables grow forever
 
 `events`, `dm_events`, `match_decisions` and `send_log` are never pruned. At
 assignment scale this is a few MB. At "millions a month" the governor's

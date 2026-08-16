@@ -81,6 +81,12 @@ def keepalive_url() -> str:
     return ""
 
 
+# --- Demo / admin write endpoints -------------------------------------------
+# Endpoints that inject events or start simulations spend our rate limit and can
+# move the graded numbers. Unset means they are disabled outright, so the
+# deployed URL is safe to hand to anyone. Read-only views stay open.
+DEMO_TOKEN = os.getenv("DEMO_TOKEN", "")
+
 # How far back "is this happening now?" looks, for the invariants panel.
 INVARIANT_RECENT_WINDOW = _float("INVARIANT_RECENT_WINDOW", 900.0)
 
