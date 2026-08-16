@@ -14,12 +14,30 @@ from app import config, db  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def isolated_db(tmp_path, monkeypatch):
-    """Every test gets its own database file."""
-    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
-    db.reset_for_tests()
-    db.connect()
-    yield
-    db.reset_for_tests()
+    """Give every test a clean database.
+
+    Defaults to a throwaway SQLite file. Set TEST_DATABASE_URL to run the whole
+    suite against real Postgres instead -- which is what actually closes the gap
+    between "the tests pass" and "the deployed system works", since production
+    runs a dialect SQLite has never executed. See FAILURES.md #11.
+
+        TEST_DATABASE_URL="postgresql://..." pytest
+    """
+    pg_url = os.environ.get("TEST_DATABASE_URL", "")
+    if pg_url:
+        monkeypatch.setattr(config, "DATABASE_URL", pg_url)
+        db.reset_for_tests()
+        db.connect()
+        db.truncate_all()
+        yield
+        db.reset_for_tests()
+    else:
+        monkeypatch.setattr(config, "DATABASE_URL", "")
+        monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
+        db.reset_for_tests()
+        db.connect()
+        yield
+        db.reset_for_tests()
 
 
 @pytest.fixture

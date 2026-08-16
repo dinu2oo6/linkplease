@@ -42,33 +42,9 @@ def ingest(payload: dict) -> str:
     no-double-DM guarantee lives on the dm_tasks primary key. Running the
     redelivery through the matcher anyway is what lets us count it honestly as
     a blocked duplicate instead of silently discarding it.
+
+    Shares its implementation with the batch writer, so the single-event path
+    used by tests and the batched path used in production cannot drift apart.
     """
-    event_id = payload.get("event_id")
-    if not event_id:
-        db.record_invariant("event_missing_id", json.dumps(payload)[:500])
-        return "ignored"
-
-    now = time.time()
-    with db.tx() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO events (event_id, event_type, sent_at, first_seen_at,
-                                last_seen_at, delivery_count, processed_pass, payload)
-            VALUES (?, ?, ?, ?, ?, 1, 0, ?)
-            ON CONFLICT(event_id) DO UPDATE SET
-                last_seen_at   = excluded.last_seen_at,
-                delivery_count = events.delivery_count + 1
-            RETURNING delivery_count
-            """,
-            (
-                event_id,
-                payload.get("event_type", ""),
-                payload.get("sent_at"),
-                now,
-                now,
-                json.dumps(payload, separators=(",", ":")),
-            ),
-        )
-        delivery_count = db.first_value(cur.fetchone(), 1)
-
-    return "accepted" if delivery_count == 1 else "redelivered"
+    from .ingest import write_batch
+    return write_batch([payload])[0]

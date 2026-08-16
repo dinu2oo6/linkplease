@@ -15,8 +15,8 @@ from fastapi import FastAPI, Header, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from . import (audit, config, db, keepalive, matcher, reconciler, sender, stats,
-               webhook)
+from . import (audit, config, db, ingest, keepalive, matcher, reconciler, sender,
+               stats, webhook)
 
 STARTED_AT = time.time()
 log = logging.getLogger("linkplease")
@@ -39,6 +39,7 @@ async def lifespan(app: FastAPI):
     )
 
     _stop.clear()
+    _tasks.append(asyncio.create_task(ingest.batcher_loop(_stop)))
     _tasks.append(asyncio.create_task(matcher.matcher_loop(_stop)))
     _tasks.append(asyncio.create_task(sender.sender_loop(_stop)))
     _tasks.append(asyncio.create_task(reconciler.reconciler_loop(_stop)))
@@ -101,7 +102,9 @@ async def receive_webhook(
     if not isinstance(payload, dict):
         return JSONResponse({"error": "invalid_json"}, status_code=400)
 
-    status = await asyncio.to_thread(webhook.ingest, payload)
+    # Batched: this waits for the group's INSERT to commit, then returns. We
+    # batch the write, we never defer it -- nothing is acknowledged from memory.
+    status = await ingest.submit(payload)
     return {"status": status}
 
 

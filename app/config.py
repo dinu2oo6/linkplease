@@ -81,6 +81,12 @@ def keepalive_url() -> str:
     return ""
 
 
+# --- Ingest batching --------------------------------------------------------
+# Requests arriving within this window share one INSERT. Costs an idle event
+# ~15ms; saves a 500-event burst from serialising 500 network round-trips.
+INGEST_BATCH_WINDOW = _float("INGEST_BATCH_WINDOW", 0.015)
+INGEST_BATCH_MAX = _int("INGEST_BATCH_MAX", 100)
+
 # --- Matcher ----------------------------------------------------------------
 MATCH_INTERVAL_SECONDS = _float("MATCH_INTERVAL_SECONDS", 0.25)
 MATCH_BATCH_SIZE = _int("MATCH_BATCH_SIZE", 200)

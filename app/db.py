@@ -180,10 +180,21 @@ class _PGConn:
 
     def __init__(self, dsn: str):
         import psycopg
-        from psycopg.rows import dict_row
         self._psycopg = psycopg
         self._dsn = dsn
-        self._raw = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
+        self._raw = self._open()
+
+    def _open(self):
+        from psycopg.rows import dict_row
+        # prepare_threshold=None disables psycopg's automatic prepared
+        # statements. Neon's connection string points at a pgbouncer pooler, and
+        # in transaction pooling mode a prepared statement can be issued on one
+        # backend and executed on another. Without this the app works for the
+        # first few queries and then fails on whichever one crosses the
+        # threshold -- a failure that would have appeared only under load.
+        return self._psycopg.connect(
+            self._dsn, row_factory=dict_row, autocommit=False,
+            prepare_threshold=None, connect_timeout=15)
 
     def _reconnect(self) -> None:
         # Neon drops idle connections, and a 30-minute drain has long idle gaps.
@@ -191,8 +202,7 @@ class _PGConn:
             self._raw.close()
         except Exception:
             pass
-        self._raw = self._psycopg.connect(
-            self._dsn, row_factory=self._psycopg.rows.dict_row, autocommit=False)
+        self._raw = self._open()
 
     def execute(self, sql: str, params: tuple = ()):
         translated = sql.replace("?", "%s") if params else sql
@@ -324,11 +334,30 @@ def reset_for_tests() -> None:
         _conn = None
 
 
+TABLES = ["sim_runs", "invariants", "send_log", "dm_events", "match_decisions",
+          "dm_tasks", "tombstones", "comments", "events", "rules"]
+
+
 def drop_all() -> None:
-    """Wipe every table. Used to give a Postgres test run a clean slate."""
-    tables = ["sim_runs", "invariants", "send_log", "dm_events", "match_decisions",
-              "dm_tasks", "tombstones", "comments", "events", "rules"]
+    """Wipe every table, schema included."""
     with tx() as conn:
-        for table in tables:
+        for table in TABLES:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
     reset_for_tests()
+
+
+def truncate_all() -> None:
+    """Empty every table but keep the schema. Fast reset between tests."""
+    conn = connect()
+    with _lock:
+        try:
+            if config.use_postgres():
+                conn.execute(
+                    "TRUNCATE " + ", ".join(TABLES) + " RESTART IDENTITY CASCADE")
+            else:
+                for table in TABLES:
+                    conn.execute(f"DELETE FROM {table}")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise

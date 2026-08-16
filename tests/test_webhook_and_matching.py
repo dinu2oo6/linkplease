@@ -286,6 +286,48 @@ def test_cancelled_dms_are_excluded_from_every_headline_number():
 
 # --- malformed input --------------------------------------------------------
 
+def test_batch_write_collapses_same_event_id_within_one_batch():
+    """Postgres refuses to let one ON CONFLICT DO UPDATE touch a row twice.
+
+    Redeliveries land milliseconds apart, so a batch window will absolutely
+    contain the same event_id more than once. Each copy must still be told its
+    own delivery number.
+    """
+    from app.ingest import write_batch
+    event = make_event(text="PRICE", event_id="evt_batched")
+    results = write_batch([event, event, event])
+
+    assert results == ["accepted", "redelivered", "redelivered"]
+    assert db.scalar("SELECT delivery_count FROM events WHERE event_id='evt_batched'") == 3
+    assert db.scalar("SELECT COUNT(*) FROM events") == 1
+
+
+def test_batch_write_mixes_new_repeat_and_malformed_events():
+    from app.ingest import write_batch
+    a = make_event(text="PRICE", event_id="evt_a")
+    b = make_event(text="LINK", event_id="evt_b")
+    write_batch([a])                       # a is already known
+    results = write_batch([a, b, {"no": "id"}, b])
+
+    assert results == ["redelivered", "accepted", "ignored", "redelivered"]
+    assert db.scalar("SELECT COUNT(*) FROM events") == 2
+
+
+def test_a_malformed_payload_does_not_roll_back_the_batch_around_it():
+    from app.ingest import write_batch
+    good = make_event(text="PRICE", event_id="evt_good")
+    write_batch([{"broken": True}, good, {"also": "broken"}])
+    assert db.scalar("SELECT COUNT(*) FROM events WHERE event_id='evt_good'") == 1
+
+
+def test_batched_and_single_ingest_agree():
+    """The two entry points share one implementation; prove they stay in step."""
+    from app.ingest import write_batch
+    single = webhook.ingest(make_event(event_id="evt_single"))
+    batched = write_batch([make_event(event_id="evt_batch_one")])[0]
+    assert single == batched == "accepted"
+
+
 def test_event_without_id_is_recorded_but_not_stored():
     assert webhook.ingest({"event_type": "comment.created", "data": {}}) == "ignored"
     assert db.scalar("SELECT COUNT(*) FROM events") == 0
