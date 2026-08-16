@@ -15,9 +15,50 @@ Parts A + B + C.
 | `POST /rules` | `{keyword, dm_message}` → `201 {rule_id, keyword, dm_message}`. Matching is case-insensitive, anywhere in the text. |
 | `GET /stats` | `{sent, failed, queued, duplicates_blocked}` — four `COUNT(*)`s over the ledger, computed at request time. |
 
-Also available: `GET /` (live dashboard), `GET /health`, `GET /rules`, `GET /tasks`,
-`GET /dm/{dedupe_key}` (full state-transition trace for one DM),
-`GET /stats?verbose=1`, `POST /admin/simulate`, `GET /audit/{run_id}`.
+Also available: `GET /` (demo console), `GET /health`, `GET /rules`, `GET /tasks`,
+`GET /dm/{dedupe_key}` (state-transition trace for one DM), `GET /stats?verbose=1`,
+`GET /audit/{run_id}`, `GET /checkpoints`, `GET /inbox`, `GET /activity`,
+`GET /export.xlsx`.
+
+## The demo console
+
+`GET /` is a working console, not a status page. It creates accounts, floods the
+webhook, and verifies the result — so the system demonstrates itself.
+
+**Simulator.** Choose how many accounts, how many comments, over how long, what
+fraction mention a keyword, how many arrive twice, how many get deleted. Every
+comment is signed and delivered over HTTP to our own `/webhook`, so a flood
+exercises signature verification, batched ingest, matching, dedupe, the rate
+governor and reconciliation exactly as real traffic does. Nothing reaches into
+the pipeline's internals — if the demo holds, the system holds.
+
+**Checkpoints.** Each guarantee from the brief, evaluated as a live query:
+
+| Checkpoint | What it proves |
+|---|---|
+| No event lost | Every delivery recorded and matched |
+| No duplicate DMs | One DM per person per rule, ever |
+| No DM silently lost | Every DM ends delivered, failed or cancelled |
+| Rate limit never breached | Peak sends in any rolling 60s vs the ceiling |
+| Delivery confirmed, not assumed | Only a polled `delivered` counts as sent |
+| Deleted comments don't get DMs | Deletes cancel unsent DMs, in any order |
+| Forged webhooks rejected | Forgeries bounce and never reach the ledger |
+| Webhook answers within 5s | Measured median / p95 / worst |
+
+They report **PASS / FAIL / PENDING**, and `PENDING` is load-bearing: a guarantee
+nothing has exercised is not a pass. The signature checkpoint stays `PENDING`
+while verification is merely *enabled* — it only passes once something forged has
+actually been rejected. So the flood mixes in forged requests, and the checkpoint
+additionally asserts that none of them reached the ledger.
+
+**Inboxes** show what each person received, from their side. **Excel export**
+(`/export.xlsx`) writes four sheets — summary, checkpoints, DM log, blocked
+duplicates — read from the ledger at request time, so the spreadsheet cannot
+disagree with `/stats`.
+
+The controls that spend the API rate limit (`/demo/*`, `/admin/simulate`) require
+`DEMO_TOKEN` and return `404` when it is unset. Read-only views stay open, so the
+URL is safe to share.
 
 ---
 
