@@ -51,6 +51,15 @@ def verbose_stats() -> dict:
         row["kind"]: row["n"]
         for row in db.query("SELECT kind, COUNT(*) AS n FROM invariants GROUP BY kind")
     }
+    # An all-time counter that can only go up sits on the dashboard looking
+    # alarming forever after a fixed bug, which trains you to ignore the one
+    # panel you shouldn't. Recent is what tells you whether it's happening now.
+    invariants_recent = {
+        row["kind"]: row["n"]
+        for row in db.query(
+            "SELECT kind, COUNT(*) AS n FROM invariants WHERE ts > ?"
+            " GROUP BY kind", (now - config.INVARIANT_RECENT_WINDOW,))
+    }
 
     events_total = db.scalar("SELECT COUNT(*) FROM events")
     deliveries = db.scalar("SELECT COALESCE(SUM(delivery_count), 0) FROM events")
@@ -78,6 +87,7 @@ def verbose_stats() -> dict:
         ),
         # Expected to stay empty. rate_limited > 0 means the governor has a bug.
         "invariants": invariants,
+        "invariants_recent": invariants_recent,
         "signature_required": config.REQUIRE_SIGNATURE,
         "send_interval_seconds": config.SEND_INTERVAL_SECONDS,
         "server_time": now,

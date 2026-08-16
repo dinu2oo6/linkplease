@@ -81,6 +81,9 @@ def keepalive_url() -> str:
     return ""
 
 
+# How far back "is this happening now?" looks, for the invariants panel.
+INVARIANT_RECENT_WINDOW = _float("INVARIANT_RECENT_WINDOW", 900.0)
+
 # --- Ingest batching --------------------------------------------------------
 # Requests arriving within this window share one INSERT. Costs an idle event
 # ~15ms; saves a 500-event burst from serialising 500 network round-trips.

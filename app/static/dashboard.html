@@ -63,8 +63,9 @@
   <h2>Pipeline</h2>
   <table><tbody id="pipeline"></tbody></table>
 
-  <h2>Invariants <span class="sub">(these should all stay at zero)</span></h2>
+  <h2>Invariants <span class="sub">(last 15 min — these should stay at zero)</span></h2>
   <table><tbody id="invariants"></tbody></table>
+  <div class="sub" id="invhist" style="margin-top:10px"></div>
 </main>
 
 <footer>Refreshing every 2s · <code>GET /stats?verbose=1</code></footer>
@@ -114,10 +115,17 @@ async function tick() {
     ['Rules', d.rules],
   ]);
 
-  const inv = Object.entries(d.invariants || {});
-  rows($('invariants'), inv.length
-    ? inv.map(([k, v]) => [k, v, true])
-    : [['none recorded', '0']]);
+  // Recent is what tells you whether something is wrong *now*. All-time is
+  // shown below it as history, so a fixed bug stops looking like a live one.
+  const recent = Object.entries(d.invariants_recent || {});
+  rows($('invariants'), recent.length
+    ? recent.map(([k, v]) => [k, v, true])
+    : [['nothing in the last 15 min', '0']]);
+
+  const all = Object.entries(d.invariants || {});
+  $('invhist').textContent = all.length
+    ? 'All time: ' + all.map(([k, v]) => `${k} ${v}`).join(' · ')
+    : '';
 }
 tick(); setInterval(tick, 2000);
 </script>
