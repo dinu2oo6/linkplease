@@ -73,25 +73,34 @@ failure rate. So this isn't a rare path I'm hedging about: on this workload it's
 one DM in seven, and every one of them is a coin-flip I've chosen to resolve in
 favour of sending again.
 
-### 3. Two application processes would breach the rate limit
+### 3. I predicted the rate-limit race, wrote it down, and then hit it in production
 
-The rolling-window check reads `send_log` from the database, so two processes
-would at least see each other's sends — but the check and the send are not
-atomic, and the 6.1s pacing clock is per-process and in memory. Two workers would
-each believe they owned a fresh cadence, and both could pass the window check in
-the same instant.
+This entry used to say two processes *would* breach the limit, that one instance
+was enough, and that I wasn't going to fix it. Then the invariants panel showed
+`rate_limited: 2` — two real `429`s — with the detail `429 with 10 sends in last
+60s` against a governor that caps at 9.
 
-The Dockerfile pins `--workers 1` and the service runs one instance. This is a
-constraint I've written down, not one the code enforces. Anyone who scales it to
-2 instances gets 429s within a minute.
+The cause was a deploy. **Render starts the replacement instance before stopping
+the old one**, so every deploy briefly runs two sender loops, each with its own
+in-memory pacing clock. I deployed three times during a drain. Counting and then
+sending is not atomic, so both instances passed the window check in the same
+instant.
 
-**Fix:** the outbox claim already uses `UPDATE ... WHERE key = (SELECT ... LIMIT 1)
-RETURNING *`, which is safe under concurrency; it's the governor that isn't. It
-would need `SELECT ... FOR UPDATE SKIP LOCKED` and a token bucket held in a row
-rather than in a module global. Now that production is on Postgres this is
-genuinely available — I didn't do it because one process comfortably saturates a
-10/min limit, and untested concurrency code is worse than a documented
-single-writer constraint.
+I had documented the failure and then walked straight into it, because I filed it
+under "only if someone scales this up" and never noticed a rolling deploy is the
+same thing for thirty seconds.
+
+**Fixed properly.** `sender.reserve_slot()` now counts the window and writes the
+row that claims the slot inside a single transaction holding
+`pg_advisory_xact_lock`, so concurrent instances serialise on the reservation and
+the two steps cannot be separated. SQLite needs no lock — `db.tx()` is already a
+single global writer. Verified with 16 concurrent threads against real Postgres:
+never hands out more slots than the window holds, at any concurrency.
+
+**What's still true:** the 6.1s pacing clock remains per-process and in memory,
+so two instances still *pace* independently. They can no longer exceed the
+window, but they will bunch sends toward the start of it rather than spreading
+them evenly. Pacing is a politeness optimisation now, not the safety mechanism.
 
 ### 4. A crash between PseudoGram receiving a send and my writing the `dm_id` is only safe if their idempotency cache outlives my downtime
 
@@ -222,7 +231,35 @@ I run the suite against the real Neon database before deploying, which closes
 most of this. What it doesn't close: the tests exercise one writer, and Postgres
 under genuine concurrency has isolation semantics SQLite simply doesn't have.
 
-### 13. Render's free tier suspends the service, and the fix is a hack
+### 13. I destroyed the production ledger with my own test suite
+
+Mid-drain, with 87 of 97 DMs delivered, I ran the test suite with
+`TEST_DATABASE_URL` set to the production connection string to check the
+Postgres path. Every test truncates every table. The run's entire ledger —
+events, tasks, decisions, stats — was gone in about a second, and `/stats` went
+from `{sent: 87, queued: 10}` to four zeroes.
+
+Nothing about that was the system failing. The durability design worked exactly
+as intended right up until the operator pointed a `TRUNCATE` at it. **The ledger
+is only as safe as the least careful command I run against it**, and I was the
+least careful thing in the environment all afternoon.
+
+Had this happened during grading it would have zeroed the submission, and the
+`/stats` response would have looked perfectly healthy and perfectly honest while
+doing it — the same silent-success shape as #1.
+
+**Fixed:** `tests/conftest.py` refuses to start if the test database name matches
+the deployed one, and test runs now use a separate `linkplease_test` database on
+the same Neon project.
+
+**Still wrong:** the guard compares database *names*. Point it at a different
+Neon project that also happens to contain a database called something else and
+it will happily truncate that. There is no "this is production" flag on the
+database itself, no backup, and nothing that would let me undo it. A real system
+would have the credentials for the deployed database simply not be present in a
+developer shell.
+
+### 14. Render's free tier suspends the service, and the fix is a hack
 
 Render stops a free service after ~15 minutes with no inbound HTTP. Background
 work doesn't count, so a 30-minute drain — which by definition receives no
@@ -242,7 +279,7 @@ honest limits:
 On a host with a persistent disk and no idle suspension this file doesn't exist.
 That's what `fly.toml` is for.
 
-### 14. Neon drops idle connections, and the ledger is one connection
+### 15. Neon drops idle connections, and the ledger is one connection
 
 The Postgres connection is a pool of one, because the rate governor and the
 outbox claim are only correct with a single writer. Neon closes idle
@@ -258,26 +295,26 @@ crash, but it also does not make progress until Neon comes back.
 Neon's free tier also suspends a project after ~5 minutes idle. Wake-up is
 ~500ms, which the driver absorbs as a slow query.
 
-### 15. One database, no backups
+### 16. One database, no backups
 
 The entire ledger is one Neon project on the free tier. If it's lost, every
 pending DM and every stat goes with it. No backups, no replica, nothing in the
 design guards against it.
 
-### 16. If my API key is rotated, every webhook is rejected and the events are gone
+### 17. If my API key is rotated, every webhook is rejected and the events are gone
 
 The key is the HMAC secret. A rotated key means every signature fails, `/webhook`
 returns 401, and PseudoGram records a delivered-and-rejected response. Those
 events are never retried and never appear in my ledger, so my numbers would look
 *perfect* while I received nothing. A silent, invisible total failure.
 
-### 17. `/rules` and `/admin/simulate` have no authentication
+### 18. `/rules` and `/admin/simulate` have no authentication
 
 Anyone who finds the deployed URL can create rules that DM strangers on my key's
 behalf, or start a 500-event simulation against my rate limit. For an assignment
 with an unlisted URL this is a considered omission; in production it's a hole.
 
-### 18. The live API's contract differs from its documentation, and I only found the differences I went looking for
+### 19. The live API's contract differs from its documentation, and I only found the differences I went looking for
 
 I built the retry policy from the spec, then probed the real endpoint with my key
 before deploying. Three things did not match:
@@ -300,7 +337,7 @@ other divergences I haven't hit, because I only probed the paths I thought to
 probe. Anything the API does that I didn't test, I have handled according to a
 document that has already been wrong three times out of three.
 
-### 19. The tables grow forever
+### 20. The tables grow forever
 
 `events`, `dm_events`, `match_decisions` and `send_log` are never pruned. At
 assignment scale this is a few MB. At "millions a month" the governor's
