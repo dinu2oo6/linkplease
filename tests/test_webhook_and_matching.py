@@ -276,6 +276,56 @@ def test_delete_arriving_before_create_suppresses_the_dm():
     assert stats.core_stats()["duplicates_blocked"] == 0
 
 
+def test_out_of_order_delete_marks_the_comment_deleted():
+    """The delete arrives before the comment row exists, so the UPDATE in the
+    delete handler matches nothing. If we don't stamp it when the comment finally
+    lands, it reads as live forever and every view of it is wrong."""
+    matcher.create_rule("PRICE", "list")
+    webhook.ingest(make_event(comment_id="cmt_ooo", event_type="comment.deleted"))
+    matcher.process_pending()
+    webhook.ingest(make_event(text="PRICE", user_id="usr_1", comment_id="cmt_ooo"))
+    matcher.process_pending()
+
+    row = db.query_one("SELECT deleted_at FROM comments WHERE comment_id = 'cmt_ooo'")
+    assert row is not None and row["deleted_at"] is not None
+
+
+def test_a_suppressed_match_is_not_reported_as_no_keyword_matched():
+    """Someone whose matching comment was deleted first did not 'fail to match'.
+
+    Saying so on the accounts page is a plain lie about a person whose comment
+    demonstrably contained the keyword.
+    """
+    from app import people
+    matcher.create_rule("PRICE", "list")
+    webhook.ingest(make_event(comment_id="cmt_s", event_type="comment.deleted"))
+    matcher.process_pending()
+    webhook.ingest(make_event(text="PRICE please", user_id="usr_s", comment_id="cmt_s"))
+    matcher.process_pending()
+
+    person = next(p for p in people.people()["people"] if p["user_id"] == "usr_s")
+    assert person["outcome"] == "suppressed"
+    assert person["suppressed"] == 1
+    assert person["dms"] == []
+    assert stats.core_stats()["duplicates_blocked"] == 0   # not a duplicate
+
+
+def test_people_view_separates_every_outcome():
+    from app import people
+    matcher.create_rule("PRICE", "list")
+    webhook.ingest(make_event(text="PRICE", user_id="usr_got"))
+    webhook.ingest(make_event(text="just vibes", user_id="usr_nokeyword"))
+    matcher.process_pending()
+    with db.tx() as conn:
+        conn.execute("UPDATE dm_tasks SET state = ? WHERE user_id = 'usr_got'",
+                     (db.DELIVERED,))
+
+    by_user = {p["user_id"]: p for p in people.people()["people"]}
+    assert by_user["usr_got"]["outcome"] == "delivered"
+    assert by_user["usr_nokeyword"]["outcome"] == "none"
+    assert by_user["usr_nokeyword"]["dms"] == []
+
+
 def test_delete_after_delivery_does_not_rewrite_history():
     matcher.create_rule("PRICE", "list")
     webhook.ingest(make_event(text="PRICE", user_id="usr_1", comment_id="cmt_z"))

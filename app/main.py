@@ -20,7 +20,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from . import (activity, audit, checkpoints, config, db, export, inbox, ingest,
-               keepalive, matcher, reconciler, sender, simulator, stats, webhook)
+               keepalive, matcher, people, reconciler, sender, simulator, stats,
+               webhook)
 
 STARTED_AT = time.time()
 log = logging.getLogger("linkplease")
@@ -381,10 +382,31 @@ async def audit_run(run_id: str):
 
 # --- dashboard --------------------------------------------------------------
 
-_DASHBOARD = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
+_STATIC = os.path.join(os.path.dirname(__file__), "static")
+
+
+def _page(name: str) -> HTMLResponse:
+    with open(os.path.join(_STATIC, name), encoding="utf-8") as fh:
+        return HTMLResponse(fh.read())
+
+
+@app.get("/people")
+def get_people(limit: int = 60, offset: int = 0, only: str | None = None,
+               search: str | None = None):
+    """Everyone who commented, what they said, and what they got back."""
+    return people.people(limit, offset, only, search)
+
+
+@app.get("/analytics")
+def get_analytics():
+    return people.analytics()
+
+
+@app.get("/accounts", response_class=HTMLResponse)
+def accounts_page():
+    return _page("accounts.html")
 
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
-    with open(_DASHBOARD, encoding="utf-8") as fh:
-        return HTMLResponse(fh.read())
+    return _page("dashboard.html")

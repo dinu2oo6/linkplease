@@ -77,6 +77,17 @@ def _handle_created(conn, event_id: str, pass_no: int, payload: dict) -> None:
     deleted = conn.execute(
         "SELECT 1 FROM tombstones WHERE comment_id = ?", (comment_id,)
     ).fetchone()
+    if deleted and comment_id:
+        # The delete landed before the comment row existed, so the UPDATE in
+        # _handle_deleted matched nothing. Stamp it now, or the comment reads as
+        # live forever and every view of it is wrong.
+        row = conn.execute(
+            "SELECT deleted_at FROM tombstones WHERE comment_id = ?", (comment_id,)
+        ).fetchone()
+        conn.execute(
+            "UPDATE comments SET deleted_at = ? WHERE comment_id = ? AND deleted_at IS NULL",
+            (row["deleted_at"] if row else time.time(), comment_id),
+        )
 
     now = time.time()
     source_ref = f"{event_id}#{pass_no}"
