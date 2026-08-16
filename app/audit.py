@@ -65,7 +65,7 @@ def _event_fields(event: dict) -> tuple[str, str, str, str, str]:
     )
 
 
-def _audit_summary_truth(run_id: str, truth: dict) -> dict:
+def _audit_summary_truth(run_id: str, truth: dict, since: float | None = None) -> dict:
     """Audit against PseudoGram's real truth format.
 
     They report totals and the set of user_ids that should have been DMed --
@@ -80,15 +80,27 @@ def _audit_summary_truth(run_id: str, truth: dict) -> dict:
     expected = {str(u) for u in (truth.get("expected_unique_recipients") or [])}
 
     ours = stats.verbose_stats()
-    our_recipients = {
-        r["user_id"] for r in db.query("SELECT DISTINCT user_id FROM dm_tasks")
-    }
+    # Scope to work created after the run started. A truth file describes one
+    # run, while the ledger accumulates every run plus any manual traffic --
+    # comparing the two unscoped reports every earlier recipient as a false
+    # positive, which is the tool being wrong, not the system.
+    if since:
+        our_recipients = {
+            r["user_id"] for r in db.query(
+                "SELECT DISTINCT user_id FROM dm_tasks WHERE created_at >= ?",
+                (since - 5,))
+        }
+    else:
+        our_recipients = {
+            r["user_id"] for r in db.query("SELECT DISTINCT user_id FROM dm_tasks")
+        }
     missing = sorted(expected - our_recipients)
     unexpected = sorted(our_recipients - expected)
     unacknowledged = attempted - acknowledged
 
     return {
         "run_id": run_id,
+        "scoped_to_run": bool(since),
         "verdict": {
             # Their count of deliveries we failed to 200. This is the number
             # that would have been ~540 while my signature check was wrong, and
@@ -120,17 +132,21 @@ def _audit_summary_truth(run_id: str, truth: dict) -> dict:
     }
 
 
-async def audit_run(run_id: str) -> dict:
+async def audit_run(run_id: str, since: float | None = None) -> dict:
     resp = await client().get(f"/v1/simulate/{run_id}/truth")
     if resp.status_code != 200:
         return {"error": "truth_unavailable", "status": resp.status_code,
                 "body": resp.text[:500]}
     truth = resp.json()
 
+    if since is None:
+        row = db.query_one("SELECT started_at FROM sim_runs WHERE run_id = ?", (run_id,))
+        since = row["started_at"] if row else None
+
     # The live API reports summary totals; the local chaos clone reports a full
     # event list. Handle whichever we're pointed at.
     if isinstance(truth, dict) and "expected_unique_recipients" in truth:
-        return _audit_summary_truth(run_id, truth)
+        return _audit_summary_truth(run_id, truth, since)
 
     events = _extract_events(truth)
     if not events:
