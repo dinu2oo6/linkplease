@@ -1,0 +1,24 @@
+# Render blueprint. Free web service; the ledger lives in Neon Postgres because
+# free tiers no longer offer a persistent disk.
+services:
+  - type: web
+    name: linkplease
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      # Set these in the Render dashboard -- never commit them.
+      - key: PSEUDOGRAM_API_KEY
+        sync: false
+      - key: PSEUDOGRAM_EMAIL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: PUBLIC_WEBHOOK_URL
+        sync: false
+      - key: PSEUDOGRAM_BASE_URL
+        value: https://pseudogram-api.onrender.com
+      - key: REQUIRE_SIGNATURE
+        value: "true"

@@ -1,0 +1,39 @@
+app = "linkplease-dinesh"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DB_PATH = "/data/linkplease.db"
+  PSEUDOGRAM_BASE_URL = "https://pseudogram-api.onrender.com"
+  REQUIRE_SIGNATURE = "true"
+
+# The ledger has to outlive the machine. A 500-event run takes ~25 minutes to
+# drain at the rate limit, which is longer than a deploy.
+[mounts]
+  source = "linkplease_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Never sleep. A cold start would blow the 5 second webhook budget and we
+  # would drop events -- and the URL has to stay live for 7 days after the
+  # deadline regardless of traffic.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+# One machine, one writer. Scaling this out needs the outbox claim and the rate
+# governor moved into Postgres first (see FAILURES.md).
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
