@@ -96,6 +96,13 @@
   .alarm { background:#3d1418; border:1px solid var(--bad); color:#ffb4ae; border-radius:10px;
            padding:14px 18px; margin-bottom:18px; font-size:14px; }
   .alarm b { color:var(--bad); }
+  .vd { margin-top:13px; border:1px solid var(--line2); border-radius:9px; overflow:hidden; }
+  .vd .hd { padding:9px 13px; font-size:12.5px; font-weight:600; }
+  .vd.clean .hd { background:#0d2814; color:var(--ok); border-bottom:1px solid #1d572c; }
+  .vd.dirty .hd { background:#2a1211; color:var(--bad); border-bottom:1px solid #5c2321; }
+  .vd table { font-size:12.5px; } .vd td { border-bottom:1px solid var(--line); }
+  .vd td:first-child { color:var(--dim); } .vd td:last-child { color:var(--ink); }
+  .dmid { font-family:ui-monospace,monospace; font-size:10.5px; color:var(--dimmer); }
   .feed { display:flex; flex-direction:column; gap:7px; }
   .item { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:10px 13px; font-size:13px; }
   .item .top { display:flex; justify-content:space-between; gap:12px; align-items:baseline; }
@@ -132,8 +139,31 @@
       <div class="d">"Accepted" isn't "delivered" — ~15% fail afterwards. We poll every one and resend the failures.</div></div>
   </div>
 
-  <h2>Simulator <span class="n">— create accounts, flood the webhook, watch it hold</span></h2>
+  <h2>1 · Real run <span class="n">— PseudoGram fires at us, then grades us</span></h2>
   <div class="panel">
+    <div class="sub" style="margin-bottom:13px">
+      Their server fires signed comment events at our <code>/webhook</code>. We match them and
+      call <b>their</b> <code>POST /v1/dm/send</code> — real API calls, real <code>dm_id</code>s,
+      polled on <b>their</b> <code>GET /v1/dm/{id}</code> until delivered. Then we ask their
+      truth file how many events they sent and who should have been DMed, and compare.
+      <b>This is the only check whose evidence comes from outside this system.</b>
+    </div>
+    <div class="row" style="margin-top:0">
+      <button id="realrun" class="go">Run 500 real events</button>
+      <button id="verify" class="ghost">Compare against their truth</button>
+    </div>
+    <div class="out" id="realout">Same thing the graders do.</div>
+    <div id="verdict"></div>
+  </div>
+
+  <h2>2 · Local simulator <span class="n">— our own traffic, for demonstrating edge cases on demand</span></h2>
+  <div class="panel">
+    <div class="sub" style="margin-bottom:13px">
+      A controllable crowd, so a specific guarantee can be shown on demand rather than waiting
+      for their random script to happen to exercise it. Comments are signed and delivered over
+      HTTP to our own <code>/webhook</code> — the same door PseudoGram knocks on — so this
+      exercises the whole pipeline. DMs still go to the real API.
+    </div>
     <div class="ctrls">
       <div><label>Accounts</label><input id="accounts" type="number" value="50" min="1" max="1000"></div>
       <div><label>Comments</label><input id="comments" type="number" value="500" min="1" max="5000"></div>
@@ -230,6 +260,42 @@ $('flood').onclick = async () => {
   tick();
 };
 
+$('realrun').onclick = async () => {
+  $('realrun').disabled = true;
+  $('realout').textContent = 'Asking PseudoGram to fire 500 events at us…';
+  const j = await call(`/admin/simulate?count=500&duration_seconds=10&token=${tok()}`, {method:'POST'});
+  if (j) $('realout').textContent =
+    `PseudoGram is firing 500 events at our webhook (run ${j.body?.run_id}). ` +
+    `Wait for the queue to drain, then compare against their truth.`;
+  setTimeout(() => $('realrun').disabled = false, 3000);
+  tick();
+};
+
+$('verify').onclick = async () => {
+  $('realout').textContent = 'Fetching their truth file…';
+  const v = await call('/verify');
+  if (!v) return;
+  if (v.status === 'no_run') { $('realout').textContent = v.message; return; }
+  if (v.error) { $('realout').textContent = 'Could not read their truth: ' + v.error; return; }
+  const ok = v.verdict.clean;
+  $('realout').textContent = ok
+    ? 'Their record and ours agree on every check.'
+    : 'Their record disagrees with ours — details below.';
+  $('verdict').innerHTML = `<div class="vd ${ok?'clean':'dirty'}">
+    <div class="hd">${ok ? '✓ VERIFIED against PseudoGram\'s own truth file'
+                         : '✗ MISMATCH against PseudoGram\'s truth file'} · run ${esc(v.run_id)}</div>
+    <table><tbody>
+      <tr><td>Events they generated</td><td>${v.truth.events_generated}</td></tr>
+      <tr><td>Deliveries they attempted (incl. redeliveries)</td><td>${v.truth.deliveries_attempted}</td></tr>
+      <tr><td><b>Deliveries we acknowledged, per their log</b></td><td><b>${v.truth.webhook_200_count}</b></td></tr>
+      <tr><td>Deliveries we failed to acknowledge</td><td>${v.verdict.deliveries_we_failed_to_acknowledge}</td></tr>
+      <tr><td>Recipients they expected to be DMed</td><td>${v.truth.expected_unique_recipients}</td></tr>
+      <tr><td>Recipients we actually DMed</td><td>${v.ours.distinct_recipients}</td></tr>
+      <tr><td>People we owed and missed</td><td>${v.verdict.recipients_we_owe_and_missed}</td></tr>
+      <tr><td>People we DMed that their truth doesn't list</td><td>${v.verdict.recipients_we_dmed_that_truth_doesnt_list}</td></tr>
+    </tbody></table></div>`;
+};
+
 let last = null;
 async function one(body) {
   const j = await call('/demo/comment?token=' + tok(),
@@ -305,6 +371,7 @@ async function tick() {
       <div class="bubble">${esc(m.message)}</div>
       <div class="tick"><span class="t-${m.status}">${esc(m.status_label)}</span>
         <span>${extra.join(' · ')}${extra.length?' · ':''}${m.waited_seconds}s</span></div>
+      ${m.dm_id ? `<div class="dmid">PseudoGram ${esc(m.dm_id)}</div>` : ''}
     </div>`;
   }).join('') || '<div class="item sub">No DMs yet — run the simulator.</div>';
 

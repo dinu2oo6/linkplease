@@ -355,6 +355,24 @@ def list_runs():
         "SELECT * FROM sim_runs ORDER BY started_at DESC LIMIT 20")]}
 
 
+@app.get("/verify")
+async def verify_latest():
+    """Audit our numbers against PseudoGram's own record of the last real run.
+
+    This is the only check in the system whose evidence comes from outside it.
+    Everything else -- stats, checkpoints, inboxes -- is us marking our own
+    homework from our own ledger. This asks *them* how many events they sent,
+    how many we acknowledged, and who should have been DMed.
+    """
+    row = db.query_one("SELECT run_id FROM sim_runs ORDER BY started_at DESC LIMIT 1")
+    if row is None:
+        return {"status": "no_run", "message":
+                "No PseudoGram run yet. Start one to compare against their truth."}
+    result = await audit.audit_run(row["run_id"])
+    result["status"] = "ok"
+    return result
+
+
 @app.get("/audit/{run_id}")
 async def audit_run(run_id: str):
     """Grade ourselves against PseudoGram's own record of what it sent us."""
