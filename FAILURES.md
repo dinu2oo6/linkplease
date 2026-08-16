@@ -9,7 +9,47 @@ real 500-event simulations against the deployed app.
 
 ---
 
-### 1. A resend after a `failed` status can deliver a second DM to a real human
+### 1. Doing Part B correctly, as documented, scores zero — and I shipped that bug
+
+The worst failure on this project was live for about an hour and would have
+silently destroyed the entire submission.
+
+The brief says the webhook signature is `HMAC-SHA256` of the raw body "using
+your API key as the secret". It isn't. Keys look like `<base64>.<hex>`, and real
+signatures verify against the base64 half **decoded** — which turns out to be the
+account email. I implemented exactly what was written, and verification rejected
+**29 of 29** live webhooks with `401`.
+
+What makes this the nastiest failure shape in the whole system: **it fails
+completely silently and looks like success.** Every event is rejected before it
+reaches the ledger, so `/stats` reports `{sent: 0, failed: 0, queued: 0}` — four
+scrupulously honest numbers describing a system that received nothing. Nothing
+in my own monitoring said "you are broken". The invariants counter said
+`bad_signature: 29`, which I had to go and look at.
+
+And the incentive is inverted: **anyone who skipped signature verification
+entirely passes this by accident.** Implementing the security feature is what
+breaks you.
+
+I found it by logging the raw request bytes next to the signature header and
+brute-forcing which secret produced their HMAC. Verification now accepts any
+secret derivable from our own key, so it survives them fixing their docs.
+
+The real lesson isn't about HMAC. It's that I had no alarm for *"receiving
+nothing looks identical to having nothing to do"*. So I built one: `/stats?verbose=1`
+now reports `REJECTING_ALL_TRAFFIC`, true when requests were rejected and none
+accepted in the last 15 minutes, and the dashboard shows it as a red banner.
+Three tests cover it, including the assertion that all four graded numbers still
+read as a healthy idle system while it fires.
+
+**What remains wrong:** I only know the secret for *my* key. If the derivation
+differs per account, or they rotate the scheme, this breaks again. The new alarm
+catches the case where *everything* is rejected; it would not catch a partial
+failure, and it stays quiet if a single request gets through. It also only fires
+once traffic arrives — a system rejecting 100% of events while nobody is sending
+any looks exactly like a healthy one, and always will.
+
+### 2. A resend after a `failed` status can deliver a second DM to a real human
 
 This is the sharpest edge in the system and I put it there on purpose.
 
@@ -33,7 +73,7 @@ failure rate. So this isn't a rare path I'm hedging about: on this workload it's
 one DM in seven, and every one of them is a coin-flip I've chosen to resolve in
 favour of sending again.
 
-### 2. Two application processes would breach the rate limit
+### 3. Two application processes would breach the rate limit
 
 The rolling-window check reads `send_log` from the database, so two processes
 would at least see each other's sends — but the check and the send are not
@@ -53,7 +93,7 @@ genuinely available — I didn't do it because one process comfortably saturates
 10/min limit, and untested concurrency code is worse than a documented
 single-writer constraint.
 
-### 3. A crash between PseudoGram receiving a send and my writing the `dm_id` is only safe if their idempotency cache outlives my downtime
+### 4. A crash between PseudoGram receiving a send and my writing the `dm_id` is only safe if their idempotency cache outlives my downtime
 
 The sequence is: mark `in_flight` → POST → write `dm_id`. If the process dies
 between the POST arriving at PseudoGram and my writing the response, the task is
@@ -68,7 +108,7 @@ shorter than my restart time, that DM goes out twice and neither my numbers nor
 theirs would show it as a duplicate — it would look like one send from each of
 two attempts.
 
-### 4. A `comment.deleted` arriving while the send is in flight is ignored
+### 5. A `comment.deleted` arriving while the send is in flight is ignored
 
 Deletes cancel tasks in state `queued` only. Once a task is claimed it is
 `in_flight` for the duration of one HTTP request (up to the 15s timeout), and a
@@ -80,7 +120,7 @@ wait, and is only `in_flight` for the request itself.
 **Conditions:** delete arrives within the ~50–300ms of an in-flight POST.
 *(chaos)* not observed in a 567-delivery run, but the window is real.
 
-### 5. Deleting the *first* comment cancels a DM that a later comment still justifies
+### 6. Deleting the *first* comment cancels a DM that a later comment still justifies
 
 A task records the `comment_id` that created it. If someone comments "PRICE"
 twice and deletes only the first, the delete cancels the pending DM even though
@@ -91,7 +131,7 @@ correct. I picked per-comment cancellation because tracking "does any live
 comment still justify this obligation" means re-deriving the whole match set on
 every delete, and the wrong-direction case is rarer than the right one.
 
-### 6. Rules created after an event arrives never apply to it
+### 7. Rules created after an event arrives never apply to it
 
 Events are matched once per delivery and then marked processed. Create a rule at
 10:05 and the comment that arrived at 10:04 is never re-evaluated, so that person
@@ -101,7 +141,7 @@ This is the correct behaviour for a live system and the wrong behaviour for
 anyone who sets up their rules after pointing the webhook at us. `run_sim.py`
 creates rules before starting a simulation for exactly this reason.
 
-### 7. Terminal failures are terminal — there is no requeue
+### 8. Terminal failures are terminal — there is no requeue
 
 After 6 send attempts or 3 resends a DM is `failed` and nothing ever retries it.
 If PseudoGram is down for ten minutes, everything that cycles through its
@@ -109,7 +149,7 @@ attempts in that window is permanently lost, and `/stats` will honestly report
 them as `failed` forever. There is no admin endpoint to push them back into the
 queue, which is the first thing I'd add.
 
-### 8. `duplicates_blocked` is my definition of "duplicate", which may not be theirs
+### 9. `duplicates_blocked` is my definition of "duplicate", which may not be theirs
 
 I count one per match evaluation that did not create a new obligation — covering
 both redelivered `event_id`s and the same person commenting again. A duplicate
@@ -138,14 +178,14 @@ looked exactly like a bug in the system. `GET /audit/{run_id}` now reports the
 band plus the three checks that *are* exact regardless of timing: no event lost,
 no pair with a surviving comment left un-DMed, no DM invented from nothing.
 
-### 9. `sent` lags reality by up to one reconcile interval, always downward
+### 10. `sent` lags reality by up to one reconcile interval, always downward
 
 A DM PseudoGram has already delivered counts as `queued` until my reconciler
 polls it (every 5s, 40 at a time). Under a large backlog that lag grows: 300
 accepted DMs take ~40s to sweep. `sent` therefore understates and never
 overstates, which is the direction I want to be wrong in.
 
-### 10. Durability is only as good as the filesystem underneath it
+### 11. Durability is only as good as the filesystem underneath it
 
 This one started as a real defect and I fixed it while writing this file. I had
 `PRAGMA synchronous=NORMAL`, which in WAL mode is durable against process death —
@@ -165,7 +205,7 @@ about for one I have to take on trust — which is the usual trade when you move
 onto managed infrastructure, and worth naming rather than treating as a
 resolution.
 
-### 11. The test suite and production run on different databases
+### 12. The test suite and production run on different databases
 
 Tests run against SQLite. Production runs against Postgres. That is a real gap:
 54 passing tests prove the logic on a dialect the deployed system doesn't use.
@@ -182,7 +222,7 @@ I run the suite against the real Neon database before deploying, which closes
 most of this. What it doesn't close: the tests exercise one writer, and Postgres
 under genuine concurrency has isolation semantics SQLite simply doesn't have.
 
-### 12. Render's free tier suspends the service, and the fix is a hack
+### 13. Render's free tier suspends the service, and the fix is a hack
 
 Render stops a free service after ~15 minutes with no inbound HTTP. Background
 work doesn't count, so a 30-minute drain — which by definition receives no
@@ -202,7 +242,7 @@ honest limits:
 On a host with a persistent disk and no idle suspension this file doesn't exist.
 That's what `fly.toml` is for.
 
-### 13. Neon drops idle connections, and the ledger is one connection
+### 14. Neon drops idle connections, and the ledger is one connection
 
 The Postgres connection is a pool of one, because the rate governor and the
 outbox claim are only correct with a single writer. Neon closes idle
@@ -218,26 +258,26 @@ crash, but it also does not make progress until Neon comes back.
 Neon's free tier also suspends a project after ~5 minutes idle. Wake-up is
 ~500ms, which the driver absorbs as a slow query.
 
-### 14. One database, no backups
+### 15. One database, no backups
 
 The entire ledger is one Neon project on the free tier. If it's lost, every
 pending DM and every stat goes with it. No backups, no replica, nothing in the
 design guards against it.
 
-### 15. If my API key is rotated, every webhook is rejected and the events are gone
+### 16. If my API key is rotated, every webhook is rejected and the events are gone
 
 The key is the HMAC secret. A rotated key means every signature fails, `/webhook`
 returns 401, and PseudoGram records a delivered-and-rejected response. Those
 events are never retried and never appear in my ledger, so my numbers would look
 *perfect* while I received nothing. A silent, invisible total failure.
 
-### 16. `/rules` and `/admin/simulate` have no authentication
+### 17. `/rules` and `/admin/simulate` have no authentication
 
 Anyone who finds the deployed URL can create rules that DM strangers on my key's
 behalf, or start a 500-event simulation against my rate limit. For an assignment
 with an unlisted URL this is a considered omission; in production it's a hole.
 
-### 17. The live API's contract differs from its documentation, and I only found the differences I went looking for
+### 18. The live API's contract differs from its documentation, and I only found the differences I went looking for
 
 I built the retry policy from the spec, then probed the real endpoint with my key
 before deploying. Three things did not match:
@@ -260,7 +300,7 @@ other divergences I haven't hit, because I only probed the paths I thought to
 probe. Anything the API does that I didn't test, I have handled according to a
 document that has already been wrong three times out of three.
 
-### 18. The tables grow forever
+### 19. The tables grow forever
 
 `events`, `dm_events`, `match_decisions` and `send_log` are never pruned. At
 assignment scale this is a few MB. At "millions a month" the governor's

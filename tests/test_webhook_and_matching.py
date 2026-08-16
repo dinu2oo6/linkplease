@@ -304,6 +304,43 @@ def test_cancelled_dms_are_excluded_from_every_headline_number():
 
 # --- malformed input --------------------------------------------------------
 
+def test_rejecting_all_traffic_alarm_fires_when_every_request_is_turned_away():
+    """The alarm for the bug that nearly sank this: four honest zeroes.
+
+    Signature verification rejecting everything is indistinguishable from an
+    idle system in every other number we report.
+    """
+    with client() as c:
+        for _ in range(3):
+            c.post("/webhook", content=raw_of(make_event()),
+                   headers={"X-PseudoGram-Signature": "sha256=" + "b" * 64})
+
+    verbose = stats.verbose_stats()["detail"]
+    assert verbose["REJECTING_ALL_TRAFFIC"] is True
+    assert verbose["rejected_recent"] == 3
+    assert verbose["accepted_recent"] == 0
+    # Every graded number still reads as a perfectly healthy idle system.
+    assert stats.core_stats() == {"sent": 0, "failed": 0, "queued": 0,
+                                 "duplicates_blocked": 0}
+
+
+def test_alarm_stays_quiet_when_traffic_is_getting_through():
+    webhook.ingest(make_event())
+    with client() as c:
+        c.post("/webhook", content=raw_of(make_event()),
+               headers={"X-PseudoGram-Signature": "sha256=" + "c" * 64})
+
+    verbose = stats.verbose_stats()["detail"]
+    assert verbose["REJECTING_ALL_TRAFFIC"] is False   # some got through
+    assert verbose["accepted_recent"] == 1
+
+
+def test_alarm_stays_quiet_when_simply_idle():
+    verbose = stats.verbose_stats()["detail"]
+    assert verbose["REJECTING_ALL_TRAFFIC"] is False
+    assert verbose["seconds_since_last_event"] is None
+
+
 def test_batch_write_collapses_same_event_id_within_one_batch():
     """Postgres refuses to let one ON CONFLICT DO UPDATE touch a row twice.
 

@@ -64,6 +64,17 @@ def verbose_stats() -> dict:
     events_total = db.scalar("SELECT COUNT(*) FROM events")
     deliveries = db.scalar("SELECT COALESCE(SUM(delivery_count), 0) FROM events")
 
+    # The alarm for the failure that nearly sank this project: when signature
+    # verification is wrong, every event is rejected at the door and /stats
+    # reports four honest zeroes. "Receiving nothing" and "nothing to receive"
+    # look identical unless you measure rejections against acceptances.
+    last_event = db.scalar("SELECT COALESCE(MAX(last_seen_at), 0) FROM events", (), 0.0)
+    rejected_recent = invariants_recent.get("bad_signature", 0)
+    accepted_recent = db.scalar(
+        "SELECT COUNT(*) FROM events WHERE last_seen_at > ?",
+        (now - config.INVARIANT_RECENT_WINDOW,))
+    rejecting_everything = rejected_recent > 0 and accepted_recent == 0
+
     stats["detail"] = {
         "tasks_by_state": by_state,
         "cancelled_by_delete": by_state.get(db.CANCELLED, 0),
@@ -88,6 +99,12 @@ def verbose_stats() -> dict:
         # Expected to stay empty. rate_limited > 0 means the governor has a bug.
         "invariants": invariants,
         "invariants_recent": invariants_recent,
+        "seconds_since_last_event": round(now - last_event, 1) if last_event else None,
+        "accepted_recent": accepted_recent,
+        "rejected_recent": rejected_recent,
+        # True means we are turning away every webhook that reaches us, which is
+        # indistinguishable from idleness in every other number on this page.
+        "REJECTING_ALL_TRAFFIC": rejecting_everything,
         "signature_required": config.REQUIRE_SIGNATURE,
         "send_interval_seconds": config.SEND_INTERVAL_SECONDS,
         "server_time": now,

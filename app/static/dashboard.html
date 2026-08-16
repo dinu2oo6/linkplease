@@ -34,6 +34,9 @@
   .flag { color: var(--bad); font-weight: 600; }
   footer { max-width: 980px; margin: 40px auto 0; color: var(--dim); font-size: 12px; }
   code { background: #0b0e13; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--line); }
+  .alarm { background: #3d1418; border: 1px solid var(--bad); color: #ffb4ae;
+           border-radius: 10px; padding: 14px 18px; margin-bottom: 18px; font-size: 14px; }
+  .alarm b { color: var(--bad); }
 </style>
 </head>
 <body>
@@ -43,6 +46,7 @@
 </header>
 
 <main>
+  <div id="alarm" class="alarm" hidden></div>
   <div class="grid">
     <div class="card sent"><div class="label">Sent</div><div class="value" id="sent">–</div>
       <div class="note">confirmed delivered</div></div>
@@ -98,7 +102,23 @@ async function tick() {
       (s.queued ? ` · ~${Math.ceil(s.queued * d.send_interval_seconds / 60)} min to drain at the rate limit`  : '')
     : 'no work yet';
 
+  // Four honest zeroes look identical whether we're idle or rejecting every
+  // request at the door. This is the only thing on the page that tells them apart.
+  const alarm = $('alarm');
+  if (d.REJECTING_ALL_TRAFFIC) {
+    alarm.hidden = false;
+    alarm.innerHTML = `<b>REJECTING ALL TRAFFIC.</b> ${d.rejected_recent} request(s) ` +
+      `rejected and 0 accepted in the last 15 min. Every other number on this page ` +
+      `is honest and every one of them looks fine. Check the signature secret.`;
+  } else {
+    alarm.hidden = true;
+  }
+
+  const since = d.seconds_since_last_event;
   rows($('rate'), [
+    ['Last event received', since === null ? 'never'
+      : since < 90 ? `${Math.round(since)}s ago`
+      : `${Math.round(since / 60)} min ago`],
     ['Sends in the last 60s', `${d.sends_last_60s} / 10 allowed`],
     ['Total send requests issued', d.sends_total],
     ['Pacing interval', d.send_interval_seconds + 's'],
