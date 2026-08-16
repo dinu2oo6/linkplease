@@ -31,6 +31,24 @@ def test_missing_signature_is_rejected():
     assert not webhook.verify_signature(raw, None)
 
 
+def test_signature_signed_with_the_decoded_key_prefix_is_accepted(monkeypatch):
+    """The live API signs with the base64-decoded prefix of the key, not the key.
+
+    Regression guard for the bug that rejected 29 of 29 real webhooks.
+    """
+    import base64
+    from app import config
+    email = "someone@example.com"
+    key = base64.urlsafe_b64encode(email.encode()).decode().rstrip("=") + ".ff0011"
+    monkeypatch.setattr(config, "API_KEY", key)
+    monkeypatch.setattr(config, "ACCOUNT_EMAIL", "")
+
+    raw = raw_of(make_event())
+    assert webhook.verify_signature(raw, sign(raw, email))       # what they send
+    assert webhook.verify_signature(raw, sign(raw, key))         # what docs say
+    assert not webhook.verify_signature(raw, sign(raw, "wrong")) # neither
+
+
 def test_signature_of_a_different_body_is_rejected():
     """The signature must cover *this* body, not merely be a valid signature."""
     other = raw_of(make_event(text="LINK"))
