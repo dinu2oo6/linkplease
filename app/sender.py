@@ -67,6 +67,10 @@ def prime_pacing() -> None:
 
 # --- rate governor ----------------------------------------------------------
 
+# Any 64-bit constant; it only has to be the same in every process.
+_SLOT_LOCK_KEY = 8123407771
+
+
 def _window_wait(now: float) -> float:
     """Seconds until the rolling window has room, per our own send log."""
     effective_max = config.RATE_LIMIT_MAX - config.RATE_LIMIT_HEADROOM
@@ -85,16 +89,64 @@ def _window_wait(now: float) -> float:
     return max(0.0, row["ts"] + config.RATE_LIMIT_WINDOW - now + 0.05)
 
 
+def reserve_slot() -> bool:
+    """Atomically claim one slot in the rolling window. True if we got it.
+
+    Counting and then sending is not atomic, and that is not theoretical: Render
+    starts a new instance before stopping the old one, so a deploy briefly runs
+    two sender loops. Both passed the count check in the same instant and we
+    took two 429s in production -- exactly the failure this file's FAILURES.md
+    entry predicted, arriving on schedule.
+
+    The whole reservation now happens inside one transaction holding a Postgres
+    advisory lock, so concurrent instances serialise here. The counting and the
+    write of the row that proves the slot was taken are no longer separable.
+    SQLite needs no lock: db.tx() is already a single global writer.
+
+    The row is written *before* the request goes out. Crashing between the two
+    over-counts our own usage by one, costing 6 seconds of throughput;
+    under-counting would cost a breached rate limit.
+    """
+    now = time.time()
+    effective_max = config.RATE_LIMIT_MAX - config.RATE_LIMIT_HEADROOM
+    with db.tx() as conn:
+        if config.use_postgres():
+            conn.execute("SELECT pg_advisory_xact_lock(?)", (_SLOT_LOCK_KEY,))
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM send_log WHERE ts > ?",
+            (now - config.RATE_LIMIT_WINDOW,),
+        ).fetchone()
+        used = db.first_value(row, 0)
+        if used >= effective_max:
+            return False
+        conn.execute("INSERT INTO send_log (ts) VALUES (?)", (now,))
+    return True
+
+
 async def await_slot(stop: asyncio.Event) -> bool:
-    """Block until it is safe to issue a send. False if we're shutting down."""
+    """Block until this process has actually reserved a send slot.
+
+    Local pacing keeps one instance evenly spaced; the reservation above is what
+    makes the limit hold when there is more than one.
+    """
     while not stop.is_set():
         now = time.time()
         pace_wait = (_last_send_at + config.SEND_INTERVAL_SECONDS) - now
-        wait = max(pace_wait, _window_wait(now))
-        if wait <= 0:
+        if pace_wait > 0:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=min(pace_wait, 5.0))
+                return False
+            except asyncio.TimeoutError:
+                continue
+
+        if await asyncio.to_thread(reserve_slot):
             return True
+
+        # Someone else holds the slots. Wait for the oldest one to age out.
+        wait = await asyncio.to_thread(_window_wait, time.time())
         try:
-            await asyncio.wait_for(stop.wait(), timeout=min(wait, 5.0))
+            await asyncio.wait_for(stop.wait(), timeout=min(max(wait, 0.5), 5.0))
+            return False
         except asyncio.TimeoutError:
             continue
     return False
@@ -186,21 +238,11 @@ def _give_up(task: dict, reason: str) -> None:
         db.trace(conn, task["dedupe_key"], db.IN_FLIGHT, db.FAILED, reason)
 
 
-def _log_send(ts: float) -> None:
-    """Record rate-limit usage *before* the request leaves.
-
-    If we crash between this row and the HTTP call we will have over-counted
-    our own usage by one. Over-counting costs 6 seconds of throughput;
-    under-counting costs a 429 and a breached rate limit.
-    """
-    with db.tx() as conn:
-        conn.execute("INSERT INTO send_log (ts) VALUES (?)", (ts,))
-
-
 async def send_one(task: dict) -> None:
+    # The send_log row was already written by reserve_slot(), inside the
+    # transaction that decided we were allowed to send at all.
     global _last_send_at
     _last_send_at = time.time()
-    await asyncio.to_thread(_log_send, _last_send_at)
     body = {
         "recipient_user_id": task["user_id"],
         "message": task["message"],

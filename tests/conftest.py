@@ -12,6 +12,33 @@ os.environ.setdefault("REQUIRE_SIGNATURE", "true")
 from app import config, db  # noqa: E402
 
 
+def _refuse_to_wipe_production(pg_url: str) -> None:
+    """Stop the suite before it truncates a live database.
+
+    This exists because I did exactly that. I ran the suite with
+    TEST_DATABASE_URL set to the production connection string while a 500-event
+    run was draining, and the per-test TRUNCATE destroyed the ledger at 87 of 97
+    DMs delivered. During grading that would have zeroed the submission.
+
+    The test database must be a *different* database from the deployed one. The
+    check is on the database name, since Neon branches share a host and user.
+    """
+    prod = os.environ.get("DATABASE_URL", "")
+    if not prod:
+        return
+
+    def dbname(url: str) -> str:
+        return url.split("?")[0].rstrip("/").rsplit("/", 1)[-1].lower()
+
+    if dbname(pg_url) == dbname(prod):
+        raise pytest.UsageError(
+            f"TEST_DATABASE_URL points at the production database "
+            f"({dbname(prod)!r}). Every test truncates every table. Create a "
+            f"separate database (e.g. 'linkplease_test') and point "
+            f"TEST_DATABASE_URL at that instead."
+        )
+
+
 @pytest.fixture(autouse=True)
 def isolated_db(tmp_path, monkeypatch):
     """Give every test a clean database.
@@ -25,6 +52,7 @@ def isolated_db(tmp_path, monkeypatch):
     """
     pg_url = os.environ.get("TEST_DATABASE_URL", "")
     if pg_url:
+        _refuse_to_wipe_production(pg_url)
         monkeypatch.setattr(config, "DATABASE_URL", pg_url)
         db.reset_for_tests()
         db.connect()

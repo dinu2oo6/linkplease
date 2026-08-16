@@ -65,12 +65,73 @@ def _event_fields(event: dict) -> tuple[str, str, str, str, str]:
     )
 
 
+def _audit_summary_truth(run_id: str, truth: dict) -> dict:
+    """Audit against PseudoGram's real truth format.
+
+    They report totals and the set of user_ids that should have been DMed --
+    not a per-event list. That is *better* than what I originally built for,
+    because `webhook_200_count` is their own count of how many deliveries we
+    acknowledged. It settles "did you drop anything" from their side of the
+    wire, which nothing in my own ledger can do: an event we never received is
+    invisible to us by definition.
+    """
+    attempted = truth.get("total_deliveries_attempted") or 0
+    acknowledged = truth.get("webhook_200_count") or 0
+    expected = {str(u) for u in (truth.get("expected_unique_recipients") or [])}
+
+    ours = stats.verbose_stats()
+    our_recipients = {
+        r["user_id"] for r in db.query("SELECT DISTINCT user_id FROM dm_tasks")
+    }
+    missing = sorted(expected - our_recipients)
+    unexpected = sorted(our_recipients - expected)
+    unacknowledged = attempted - acknowledged
+
+    return {
+        "run_id": run_id,
+        "verdict": {
+            # Their count of deliveries we failed to 200. This is the number
+            # that would have been ~540 while my signature check was wrong, and
+            # every stat I report would still have looked perfect.
+            "deliveries_we_failed_to_acknowledge": unacknowledged,
+            "recipients_we_owe_and_missed": len(missing),
+            "recipients_we_dmed_that_truth_doesnt_list": len(unexpected),
+            "clean": (unacknowledged == 0 and not missing and not unexpected),
+        },
+        "truth": {
+            "events_generated": truth.get("total_events_generated"),
+            "deliveries_attempted": attempted,
+            "redeliveries": attempted - (truth.get("total_events_generated") or 0),
+            "webhook_200_count": acknowledged,
+            "expected_unique_recipients": len(expected),
+        },
+        "ours": {
+            "event_deliveries_recorded": ours["detail"]["event_deliveries"],
+            "distinct_events": ours["detail"]["events_distinct"],
+            "distinct_recipients": len(our_recipients),
+            **{k: ours[k] for k in ("sent", "failed", "queued", "duplicates_blocked")},
+            "cancelled_by_delete": ours["detail"]["cancelled_by_delete"],
+            "invariants": ours["detail"]["invariants"],
+        },
+        "samples": {
+            "missing_recipients": missing[:10],
+            "unexpected_recipients": unexpected[:10],
+        },
+    }
+
+
 async def audit_run(run_id: str) -> dict:
     resp = await client().get(f"/v1/simulate/{run_id}/truth")
     if resp.status_code != 200:
         return {"error": "truth_unavailable", "status": resp.status_code,
                 "body": resp.text[:500]}
     truth = resp.json()
+
+    # The live API reports summary totals; the local chaos clone reports a full
+    # event list. Handle whichever we're pointed at.
+    if isinstance(truth, dict) and "expected_unique_recipients" in truth:
+        return _audit_summary_truth(run_id, truth)
+
     events = _extract_events(truth)
     if not events:
         return {"error": "could not parse truth payload", "raw_keys": list(truth)[:20]

@@ -202,6 +202,42 @@ def test_a_task_waiting_on_backoff_is_not_due_yet():
 
 # --- rate governor ----------------------------------------------------------
 
+def test_slot_reservation_is_atomic_under_concurrency():
+    """Regression for two 429s taken in production.
+
+    Render starts a new instance before stopping the old one, so a deploy runs
+    two sender loops at once. Counting-then-sending let both pass the check in
+    the same instant. Reservation now happens inside one transaction, so no
+    number of concurrent reservers can hand out more slots than exist.
+    """
+    import concurrent.futures
+    ceiling = config.RATE_LIMIT_MAX - config.RATE_LIMIT_HEADROOM
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+        granted = list(pool.map(lambda _: sender.reserve_slot(), range(60)))
+
+    assert sum(granted) == ceiling, "handed out more slots than the window holds"
+    assert db.scalar("SELECT COUNT(*) FROM send_log") == ceiling
+    assert not sender.reserve_slot()          # window is full
+
+
+def test_reservation_frees_up_as_the_window_slides():
+    ceiling = config.RATE_LIMIT_MAX - config.RATE_LIMIT_HEADROOM
+    now = time.time()
+    with db.tx() as conn:
+        for _ in range(ceiling):
+            conn.execute("INSERT INTO send_log (ts) VALUES (?)",
+                         (now - config.RATE_LIMIT_WINDOW - 1,))
+    assert sender.reserve_slot()              # all of them have aged out
+
+
+def test_a_reserved_slot_is_recorded_before_the_request_goes_out():
+    """Over-count on crash, never under-count."""
+    assert db.scalar("SELECT COUNT(*) FROM send_log") == 0
+    assert sender.reserve_slot()
+    assert db.scalar("SELECT COUNT(*) FROM send_log") == 1
+
+
 def test_governor_reports_no_wait_when_the_window_is_empty():
     assert sender._window_wait(time.time()) == 0.0
 
