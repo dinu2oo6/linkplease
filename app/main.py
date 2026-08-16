@@ -92,7 +92,14 @@ async def receive_webhook(
     raw = await request.body()
 
     if not webhook.verify_signature(raw, x_pseudogram_signature):
-        db.record_invariant("bad_signature", (x_pseudogram_signature or "<missing>")[:200])
+        # Record the exact bytes alongside the header. Without the body we can
+        # only see *that* verification failed, never *why* -- and the why is
+        # always "we disagree about the secret or the encoding".
+        db.record_invariant(
+            "bad_signature",
+            json.dumps({"sig": (x_pseudogram_signature or "<missing>")[:120],
+                        "body": raw.decode("utf-8", "replace")[:900]}),
+        )
         return JSONResponse({"error": "invalid_signature"}, status_code=401)
 
     try:
@@ -163,6 +170,17 @@ def list_tasks(state: str | None = None, limit: int = 50):
 async def start_simulation(count: int = 500, duration_seconds: int = 10,
                            webhook_url: str | None = None):
     return await audit.start_simulation(count, duration_seconds, webhook_url)
+
+
+@app.get("/admin/invariants")
+def list_invariants(kind: str | None = None, limit: int = 20):
+    if kind:
+        rows = db.query("SELECT * FROM invariants WHERE kind = ? ORDER BY id DESC"
+                        " LIMIT ?", (kind, min(limit, 100)))
+    else:
+        rows = db.query("SELECT * FROM invariants ORDER BY id DESC LIMIT ?",
+                        (min(limit, 100),))
+    return {"invariants": [dict(r) for r in rows]}
 
 
 @app.get("/admin/runs")
