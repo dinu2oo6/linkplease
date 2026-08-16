@@ -404,7 +404,11 @@ def get_analytics():
 
 @app.get("/accounts", response_class=HTMLResponse)
 def accounts_page():
-    return _page("accounts.html")
+    """Same single page; the client opens it on the Accounts tab.
+
+    Kept as a route so the tab is linkable and survives a refresh.
+    """
+    return _page("dashboard.html")
 
 
 @app.get("/", response_class=HTMLResponse)
