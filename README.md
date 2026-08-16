@@ -1,9 +1,35 @@
 # LinkPlease
 
-Comment-to-DM automation over the PseudoGram mock API. Someone comments `PRICE`,
-they get the price list — once, ever, no matter how hostile the network is.
+Someone comments `PRICE` on a post, they get DMed a price list — once, ever, over
+an API that fails 20% of the time, redelivers events, reorders them, lies about
+delivery, and allows 10 sends a minute.
 
 Parts A + B + C.
+
+> **The model:** a durable order book of people we owe a message to, worked by one
+> clerk who is only allowed to send 10 DMs per minute.
+
+Nothing is held in memory that isn't also a row on disk, so `kill -9` mid-drain
+loses nothing. Throughput is fixed by the rate limit, so the only things worth
+competing on are **not losing anything** and **not lying about the numbers**.
+
+---
+
+## Verified
+
+Live 500-event run, drained to completion, audited against PseudoGram's own truth
+file:
+
+| | |
+|---|---|
+| Deliveries they attempted → we acknowledged | 531 → **531** |
+| Recipients they expected → we DMed | 97 → **97** (0 missed, 0 invented) |
+| Failed / queued at the end | 0 / 0 |
+| Peak sends in any rolling 60s | **9** against a ceiling of 10 |
+| Deploys during the drain | **4** — nothing lost, nothing double-sent |
+
+68 tests, passing on SQLite and against real Postgres.
+[FAILURES.md](FAILURES.md) documents 19 ways this can still go wrong.
 
 ---
 
@@ -11,145 +37,134 @@ Parts A + B + C.
 
 | Route | Behaviour |
 |---|---|
-| `POST /webhook` | Verifies the HMAC signature, writes the event, returns `200`. Median ~3 ms; no rule evaluation and no outbound HTTP on this path. |
-| `POST /rules` | `{keyword, dm_message}` → `201 {rule_id, keyword, dm_message}`. Matching is case-insensitive, anywhere in the text. |
-| `GET /stats` | `{sent, failed, queued, duplicates_blocked}` — four `COUNT(*)`s over the ledger, computed at request time. |
+| `POST /webhook` | Verify HMAC, store, return `200`. ~200ms; no matching or outbound HTTP on this path. |
+| `POST /rules` | `{keyword, dm_message}` → `201 {rule_id, keyword, dm_message}`. Case-insensitive, matches anywhere. |
+| `GET /stats` | `{sent, failed, queued, duplicates_blocked}` — four `COUNT(*)`s over the ledger, computed per request. |
 
-Also available: `GET /` (demo console), `GET /health`, `GET /rules`, `GET /tasks`,
-`GET /dm/{dedupe_key}` (state-transition trace for one DM), `GET /stats?verbose=1`,
-`GET /audit/{run_id}`, `GET /checkpoints`, `GET /inbox`, `GET /activity`,
-`GET /export.xlsx`.
-
-## The demo console
-
-`GET /` is a working console, not a status page. It creates accounts, floods the
-webhook, and verifies the result — so the system demonstrates itself.
-
-**Simulator.** Choose how many accounts, how many comments, over how long, what
-fraction mention a keyword, how many arrive twice, how many get deleted. Every
-comment is signed and delivered over HTTP to our own `/webhook`, so a flood
-exercises signature verification, batched ingest, matching, dedupe, the rate
-governor and reconciliation exactly as real traffic does. Nothing reaches into
-the pipeline's internals — if the demo holds, the system holds.
-
-**Checkpoints.** Each guarantee from the brief, evaluated as a live query:
-
-| Checkpoint | What it proves |
-|---|---|
-| No event lost | Every delivery recorded and matched |
-| No duplicate DMs | One DM per person per rule, ever |
-| No DM silently lost | Every DM ends delivered, failed or cancelled |
-| Rate limit never breached | Peak sends in any rolling 60s vs the ceiling |
-| Delivery confirmed, not assumed | Only a polled `delivered` counts as sent |
-| Deleted comments don't get DMs | Deletes cancel unsent DMs, in any order |
-| Forged webhooks rejected | Forgeries bounce and never reach the ledger |
-| Webhook answers within 5s | Measured median / p95 / worst |
-
-They report **PASS / FAIL / PENDING**, and `PENDING` is load-bearing: a guarantee
-nothing has exercised is not a pass. The signature checkpoint stays `PENDING`
-while verification is merely *enabled* — it only passes once something forged has
-actually been rejected. So the flood mixes in forged requests, and the checkpoint
-additionally asserts that none of them reached the ledger.
-
-**Inboxes** show what each person received, from their side. **Excel export**
-(`/export.xlsx`) writes four sheets — summary, checkpoints, DM log, blocked
-duplicates — read from the ledger at request time, so the spreadsheet cannot
-disagree with `/stats`.
-
-The controls that spend the API rate limit (`/demo/*`, `/admin/simulate`) require
-`DEMO_TOKEN` and return `404` when it is unset. Read-only views stay open, so the
-URL is safe to share.
+Also: `/` (console), `/accounts`, `/checkpoints`, `/verify`, `/inbox`, `/people`,
+`/analytics`, `/activity`, `/audit/{run_id}`, `/dm/{key}`, `/export.xlsx`,
+`/health`, `/stats?verbose=1`.
 
 ---
 
 ## How it works
 
 ```
-POST /webhook ──▶ verify HMAC ──▶ INSERT OR IGNORE events ──▶ 200
-                                          │
-                       [matcher] ─────────┘  reads unprocessed events
-                                          │
-                                          ▼
-                                  dm_tasks (durable outbox)
-                                          │
-                       [sender] ──────────┤  one send / 6.1s, Idempotency-Key
-                                          │
-                       [reconciler] ──────┘  polls GET /v1/dm/{id}, free reads
+POST /webhook ──▶ verify HMAC ──▶ batched INSERT ──▶ 200
+                                        │
+                     [matcher] ─────────┘  reads unprocessed events
+                                        │
+                                        ▼
+                                dm_tasks (durable outbox)
+                                        │
+                     [sender] ──────────┤  reserve slot, then send
+                                        │
+                     [reconciler] ──────┘  poll until confirmed
 ```
 
-One FastAPI process, one SQLite file in WAL mode, three background asyncio tasks.
-Nothing is held in memory that isn't also a row on disk, so `kill -9` mid-drain
-loses nothing — the three loops re-scan the database on boot and carry on.
+One process, one Postgres connection, four background tasks. All three loops
+re-scan the database on boot, so a restart resumes exactly where it stopped.
 
-### The five decisions that matter
+### The decisions that matter
 
-**1. Deduplication is a `PRIMARY KEY`, not an `if` statement.**
+**Deduplication is a primary key, not an `if`.**
 `dm_tasks.dedupe_key = sha256(rule_id:user_id)`. The matcher does
-`INSERT ... ON CONFLICT DO NOTHING` and reads `rowcount`. The race the brief
-calls out by name — two identical events passing a check before either writes —
-has no window to happen in, because there is no check. Fifty concurrent
-identical deliveries produce exactly one DM and 49 blocked duplicates
-(`tests/test_webhook_and_matching.py`).
+`INSERT ... ON CONFLICT DO NOTHING` and reads `rowcount`. The race the brief warns
+about — two identical events both passing a check before either writes — has no
+window to occur in, because there is no check. 50 concurrent identical deliveries
+produce exactly one DM and 49 blocked duplicates.
 
 Identity is `user_id`, never `username`.
 
-**2. Event-level dedupe is an optimisation; it is not the correctness mechanism.**
-A redelivered `event_id` is *not* discarded at the door. It bumps
-`delivery_count`, and the matcher evaluates it again as its own pass. It then
-lands on the unique constraint like any other repeat and is counted honestly as
-a blocked duplicate. This is why `duplicates_blocked` covers both PseudoGram's
-~8% redelivery *and* the same person commenting five times, with no
-double-counting and no separate bookkeeping.
+**Event-level dedupe is an optimisation, not the correctness mechanism.**
+A redelivered `event_id` is *not* discarded at the door. It increments
+`delivery_count`, and the matcher evaluates it again as its own pass, where it
+lands on the unique constraint like any other repeat. That is why
+`duplicates_blocked` covers both redelivery and repeat commenters with one
+mechanism and no double-counting.
 
-**3. Every send carries an `Idempotency-Key`.**
-Set to the `dedupe_key`. So a retry after a timeout, a 500, or a crash mid-flight
-returns the *original* `dm_id` instead of sending a second DM. This is what makes
-"no DM is silently lost" compatible with "never DM the same person twice": we can
-retry aggressively precisely because retrying is free of consequence.
+**Every send carries an `Idempotency-Key`.**
+Set to the `dedupe_key`. A retry after a timeout, a 500, or a crash mid-flight
+returns the *original* `dm_id` instead of sending twice. This is what makes "never
+lose a DM" compatible with "never send two" — retrying is free of consequence, so
+we can be paranoid about loss.
 
-**4. `sent` means delivered, not accepted.**
-A `202` is an acceptance and ~15% of them end up `failed`. Counting those as sent
-is the single easiest way to inflate the graded number, so `sent` counts only
-`state='delivered'` — confirmed by polling `GET /v1/dm/{dm_id}`. Accepted-but-
-unconfirmed DMs sit in `queued`, which reads as "we still owe this person".
-Our numbers therefore look *lower* than a naive implementation's mid-drain. That
+**`sent` means delivered, not accepted.**
+A `202` is an acceptance and ~15% of them fail afterwards. `sent` counts only
+`state='delivered'`, confirmed by polling. Accepted-but-unconfirmed DMs sit in
+`queued`. Our numbers read *lower* than a naive implementation's mid-drain, which
 is the point.
 
-**5. The rate limiter paces rather than bursts.**
-10 sends per rolling 60s is the binding constraint on the entire system, so
-throughput is not something we can win. We send one every 6.1s (≈9.8/min) instead
-of 10 back-to-back followed by a 60s stall. Even pacing means clock skew against
-PseudoGram's window can't push us over, and a rolling-window count over
-`send_log` backstops it. Any `429` we ever receive is recorded as an invariant
-violation and shown in `/stats?verbose=1`; the expected count is zero.
+**The governor paces, and reserves before sending.**
+One send every 6.1s (~9.8/min) rather than 10 back-to-back then a 60s stall — even
+pacing means clock skew against their server can't tip us over. The slot is
+reserved by counting the window and writing the row that claims it inside one
+transaction holding `pg_advisory_xact_lock`, so counting and claiming cannot be
+separated even across instances. Any `429` is recorded as an invariant violation;
+expected count is zero.
 
-Consequence worth stating plainly: **500 events produce ~300 unique DMs, which is
-~30 minutes of draining.** A large `queued` right after a run is correct
-behaviour, not a backlog bug.
+**Consequence worth stating:** 500 events produce ~100 unique DMs, which is ~10
+minutes of draining. A large `queued` right after a run is the rate limit, not a
+backlog bug.
 
 ### Reconciliation, and the one place we chose duplicates over loss
 
-The reconciler polls every accepted DM until it reaches a terminal status.
-Status reads don't count against the rate limit, so it polls hard.
+The reconciler polls every accepted DM until terminal. Status reads don't count
+against the rate limit, so it polls hard.
 
-On `failed`, it resends — under a **new** idempotency key (`<dedupe_key>:r1`).
-It has to: the original key is bound to the dead `dm_id` and would return the
-same corpse forever. That makes a resend the one path in this system that can
-genuinely produce a second DM to a real human, if PseudoGram's `failed` status
-was itself wrong. We chose that over accepting a silent loss. It's the first
-entry in [FAILURES.md](FAILURES.md).
+On `failed`, it resends under a **new** idempotency key — it has to, since the
+original is bound to the dead `dm_id`. That makes a resend the one path that can
+genuinely produce a second DM if their `failed` status was wrong. We chose a rare
+duplicate over a silent loss; it's [FAILURES.md](FAILURES.md) #1.
 
 ### `comment.deleted`
 
-| When it arrives | What happens |
+| Arrives | Result |
 |---|---|
-| Before the DM is sent | Task → `cancelled`. Excluded from all four headline numbers. |
-| Before the `comment.created` (out of order) | Tombstone written; the matcher never creates the obligation. |
-| After the DM is accepted or delivered | Recorded, DM left alone. We don't rewrite history. |
+| Before the DM is sent | Task → `cancelled`, excluded from all four headline numbers |
+| Before the `comment.created` | Tombstone written; the obligation is never created |
+| After acceptance or delivery | Recorded, DM left alone — we don't rewrite history |
 
-`cancelled` and `suppressed_deleted` are real suppressions, but folding them into
-`duplicates_blocked` would pad a graded field, so they appear only under
-`?verbose=1`.
+Cancellations and suppressions are real, but folding them into
+`duplicates_blocked` would pad a graded field, so they appear under
+`?verbose=1` only.
+
+---
+
+## The demo console
+
+`/` is a working console, not a status page. Two tabs.
+
+**Console** splits the two things people conflate:
+
+1. **Real run** — PseudoGram fires signed events at our webhook; we call *their*
+   `/v1/dm/send` and poll *their* `/v1/dm/{id}`. **Compare against their truth**
+   then shows their record beside ours. The only check whose evidence comes from
+   outside this system.
+2. **Local simulator** — a controllable crowd (how many accounts, comments, what
+   fraction match, how many redelivered, how many deleted) for showing a specific
+   guarantee on demand. Comments are signed and delivered over HTTP to our own
+   `/webhook`, so it exercises the whole pipeline rather than a shortcut into it.
+
+**Accounts** shows every person, their comments, the DM they got, delivery status
+and the PseudoGram `dm_id`, filterable by outcome — plus delivery rate, median time
+to deliver, and a sends-per-minute sparkline against the ceiling.
+
+### Checkpoints
+
+Each guarantee from the brief, evaluated as a live query, reported **PASS / FAIL /
+PENDING**.
+
+`PENDING` is load-bearing: a guarantee nothing has exercised is not a pass. The
+signature checkpoint stays `PENDING` while verification is merely *enabled* — it
+passes only once something forged has actually bounced. So the flood mixes in
+forged requests, and the checkpoint additionally asserts none reached the ledger.
+
+`/export.xlsx` writes summary, checkpoints, DM log and blocked duplicates as four
+sheets, read from the ledger at request time so it cannot disagree with `/stats`.
+
+Endpoints that spend the rate limit (`/demo/*`, `/admin/simulate`) require
+`DEMO_TOKEN` and return `404` when it's unset. Read-only views stay open.
 
 ---
 
@@ -157,56 +172,45 @@ entry in [FAILURES.md](FAILURES.md).
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env          # add your PSEUDOGRAM_API_KEY
+cp .env.example .env          # add PSEUDOGRAM_API_KEY and PSEUDOGRAM_EMAIL
 .venv/bin/uvicorn app.main:app --port 8000
 ```
 
-Get a key:
+Get a key: `python scripts/apply_and_keygen.py --name "..." --email you@example.com
+--phone "+91..." --linkedin https://linkedin.com/in/you`
 
-```bash
-python scripts/apply_and_keygen.py --name "..." --email you@example.com \
-    --phone "+91..." --linkedin https://linkedin.com/in/you
-```
+> **The documented HMAC secret is wrong.** The brief says to sign with your API
+> key; real signatures verify against the base64 half of the key *decoded*, which
+> is your account email. Implementing Part B exactly as written rejects every event
+> with `401` and reports four honest zeroes.
+> `webhook.candidate_secrets()` accepts either.
 
 ## Testing it
 
 ```bash
-.venv/bin/python -m pytest          # 65 tests, ~7s, on SQLite
-
-# and against real Postgres -- production runs a dialect SQLite never executes
-TEST_DATABASE_URL="postgresql://.../linkplease_test" pytest
+.venv/bin/python -m pytest                                    # 68 tests, SQLite
+TEST_DATABASE_URL="postgresql://.../linkplease_test" pytest   # and real Postgres
 ```
 
-The Postgres run **must** use a different database from the deployed one. The
-suite truncates every table before every test, and `conftest.py` refuses to
-start if the two database names match — a guard that exists because I once
-pointed it at production mid-run and destroyed the ledger
-([FAILURES.md](FAILURES.md) #13).
+The Postgres run **must** use a different database from the deployed one — the
+suite truncates every table before every test, and `conftest.py` refuses to start
+if the names match. That guard exists because I once pointed it at production
+mid-run and destroyed the ledger ([FAILURES.md](FAILURES.md) #14).
 
-Covers the concurrent-dedupe race, forged and mismatched signatures, signatures
-signed with the decoded key prefix, delete before create, `4xx` never retried,
+Covered: the concurrent-dedupe race, forged and mismatched signatures, signatures
+signed with the decoded key prefix, delete-before-create, `4xx` never retried,
 `429` not consuming an attempt, a `500` that secretly created the DM anyway,
 resend under a fresh key, crash recovery of in-flight tasks, same-batch
 redelivery, 16-way concurrent slot reservation, and the alarm that fires when
 every request is being rejected.
 
-### One gotcha worth knowing before you run this yourself
-
-**The documented HMAC secret is wrong.** The brief says to sign with your API
-key. Real signatures verify against the *base64 half of the key, decoded* —
-which is your account email. Implementing Part B exactly as written rejects
-every event with `401` and reports four perfectly honest zeroes.
-`webhook.candidate_secrets()` accepts either, so this keeps working whichever
-way they meant it.
-
 ### The chaos server
 
-`scripts/chaos_server.py` is a local PseudoGram clone with the same failure modes
-— 20% 500s, 10/60s rate limit, 15% silent post-acceptance failures, 8%
-redelivery, reordering, idempotency keys. It lets us run 500-event simulations as
-often as we like without burning the real rate limit, and it exposes `GET
-/_ledger`, which the real API only shows the graders: every recipient we sent to,
-and whether any human got two DMs.
+`scripts/chaos_server.py` clones PseudoGram's failure modes — 20% 500s, 10/60s
+rate limit, 15% post-acceptance failures, 10% *ambiguous* failures (DM created,
+then a 500), 8% redelivery, reordering, idempotency keys. It runs 500-event
+simulations without burning the real rate limit, and exposes `/_ledger`: every
+recipient we sent to, and whether any human received the same message twice.
 
 ```bash
 python scripts/chaos_server.py &
@@ -216,57 +220,27 @@ PSEUDOGRAM_API_KEY=chaos-test-key PSEUDOGRAM_BASE_URL=http://127.0.0.1:8899 \
 python scripts/run_sim.py --target http://127.0.0.1:8000 --count 500 --local
 ```
 
-### Self-audit
-
-`GET /audit/{run_id}` fetches PseudoGram's own truth file for a run, replays it
-through our rules, and diffs the result against our ledger:
-
-- events they sent that never reached us,
-- DMs we should have created and didn't,
-- DMs we created that the truth doesn't justify,
-- where our counts land inside the expected band.
-
-It reports a **band** rather than a single expected number, because deletes race
-sends: a comment deleted before its DM goes out owes nothing, while the same
-comment deleted a second later correctly keeps its DM, and the truth file records
-what was sent rather than the interleaving against our own send clock. The three
-checks above are exact regardless of timing; the counts are bounded.
-
-Every number in FAILURES.md that has a digit in it came from here.
-
 ---
 
 ## Deployment
 
-Render free web service + Neon Postgres. One worker, deliberately — two would
-each believe they owned 10 sends per minute and breach the limit
-([FAILURES.md](FAILURES.md) #2).
+Render free web service + Neon Postgres, one instance.
 
-**Why not SQLite in production?** The design wants a persistent disk, and no
-free host still offers one — Render's disks are paid, Fly and Railway want a
-card. So the ledger moved to managed Postgres, which is the same durability
-guarantee bought a different way. The storage layer speaks both: SQLite for
-local dev and the test suite, Postgres when `DATABASE_URL` is set. Only three
-things differ between the dialects (placeholders, auto-increment, float type),
-all handled in `app/db.py`.
+**Why not SQLite in production?** The design wants a persistent disk and no free
+host still offers one. The ledger moved to managed Postgres — same durability
+guarantee, bought differently. `app/db.py` speaks both: SQLite for local dev and
+tests, Postgres when `DATABASE_URL` is set. Only placeholders, auto-increment and
+the float type differ.
 
-```bash
-# Neon: create a project, copy the connection string
-# Render: New > Web Service > from this repo, runtime Docker, plan Free
-#   env: PSEUDOGRAM_API_KEY, PSEUDOGRAM_EMAIL, DATABASE_URL, PUBLIC_WEBHOOK_URL
-```
+**One worker, deliberately.** Two would each believe they owned 10 sends a minute.
+The slot reservation now makes that safe, but the pacing clock is still
+per-process ([FAILURES.md](FAILURES.md) #13).
 
-`render.yaml` declares the service; secrets are `sync: false` so they're set in
-the dashboard, never committed.
+**Idle suspension.** Render stops a free service after ~15 minutes without inbound
+traffic, and background work doesn't count — so a 10-minute drain would be
+suspended halfway. `app/keepalive.py` calls our own `/health` every 10 minutes so
+the request re-enters as inbound traffic. It keeps the service awake; it cannot
+wake it. That's a workaround for a hosting constraint, not engineering.
 
-**The free-tier catch:** Render suspends a service after ~15 minutes with no
-*inbound* traffic, and background loops don't count — so a 30-minute drain would
-be suspended halfway. `app/keepalive.py` calls our own `/health` every 10
-minutes, which leaves the machine and comes back through Render's router as
-inbound traffic. It keeps the service awake; it cannot wake it up. That's a
-workaround for a hosting constraint, not engineering, and it's documented as
-such.
-
-`fly.toml` is kept in the repo: it's the deployment this was designed for, with
-a real persistent volume and no idle suspension, and it's a two-command deploy
-for anyone who has a card on Fly.
+`fly.toml` is kept as the deployment this was designed for — real persistent
+volume, no idle suspension, two commands.
