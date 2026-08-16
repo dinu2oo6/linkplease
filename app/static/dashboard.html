@@ -6,91 +6,116 @@
 <title>LinkPlease</title>
 <style>
   :root {
-    --bg: #0e1116; --panel: #161b22; --panel2: #1b2129; --line: #262c36;
-    --ink: #e6edf3; --dim: #8b949e; --dimmer: #6e7681;
-    --ok: #3fb950; --warn: #d29922; --bad: #f85149; --busy: #58a6ff; --acc: #bc8cff;
+    --bg:#0e1116; --panel:#161b22; --panel2:#1b2129; --line:#262c36; --line2:#323a46;
+    --ink:#e6edf3; --dim:#8b949e; --dimmer:#6e7681;
+    --ok:#3fb950; --warn:#d29922; --bad:#f85149; --busy:#58a6ff; --acc:#bc8cff;
     font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); padding: 32px 24px 80px;
-         line-height: 1.5; }
-  main, header { max-width: 1000px; margin: 0 auto; }
-  header { margin-bottom: 26px; }
-  h1 { font-size: 21px; margin: 0 0 8px; letter-spacing: -0.01em; }
-  .sub { color: var(--dim); font-size: 13.5px; }
-  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: var(--dim);
-       margin: 36px 0 12px; font-weight: 600; }
-  code { background: #0b0e13; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--line);
-         font-size: .9em; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); padding:30px 22px 80px; line-height:1.5; }
+  main, header { max-width:1120px; margin:0 auto; }
+  header { margin-bottom:22px; }
+  h1 { font-size:21px; margin:0 0 7px; letter-spacing:-.01em; }
+  .sub { color:var(--dim); font-size:13.5px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.09em; color:var(--dim);
+       margin:34px 0 12px; font-weight:600; display:flex; align-items:baseline; gap:10px; }
+  h2 .n { color:var(--dimmer); text-transform:none; letter-spacing:0; font-weight:400; }
+  code { background:#0b0e13; padding:2px 6px; border-radius:4px; border:1px solid var(--line); font-size:.9em; }
 
-  /* pipeline explainer */
-  .flow { display: flex; gap: 10px; flex-wrap: wrap; margin: 4px 0 8px; }
-  .step { flex: 1 1 170px; background: var(--panel); border: 1px solid var(--line);
-          border-radius: 10px; padding: 13px 15px; position: relative; }
-  .step .n { font-size: 10px; color: var(--acc); font-weight: 700; letter-spacing: .1em; }
-  .step .t { font-size: 13.5px; font-weight: 600; margin: 4px 0 5px; }
-  .step .d { font-size: 12px; color: var(--dim); }
+  .flow { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:6px; }
+  .step { flex:1 1 180px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .step .n { font-size:10px; color:var(--acc); font-weight:700; letter-spacing:.1em; }
+  .step .t { font-size:13.5px; font-weight:600; margin:4px 0 5px; }
+  .step .d { font-size:12px; color:var(--dim); }
 
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
-  .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
-  .card .value { font-size: 34px; font-weight: 600; margin-top: 6px; font-variant-numeric: tabular-nums; }
-  .card .note { font-size: 11.5px; color: var(--dimmer); margin-top: 4px; }
-  .sent .value { color: var(--ok); } .failed .value { color: var(--bad); }
-  .queued .value { color: var(--busy); } .dupes .value { color: var(--warn); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:13px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:15px 17px; }
+  .card .label { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); }
+  .card .value { font-size:33px; font-weight:600; margin-top:5px; font-variant-numeric:tabular-nums; }
+  .card .note { font-size:11.5px; color:var(--dimmer); margin-top:3px; }
+  .sent .value{color:var(--ok)} .failed .value{color:var(--bad)}
+  .queued .value{color:var(--busy)} .dupes .value{color:var(--warn)}
 
-  .bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 16px; }
-  .bar span { display: block; height: 100%; background: var(--ok); transition: width .4s ease; }
+  .bar { height:8px; background:var(--line); border-radius:99px; overflow:hidden; margin-top:15px; }
+  .bar span { display:block; height:100%; background:var(--ok); transition:width .4s ease; }
 
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  td:last-child { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
-  .flag { color: var(--bad); font-weight: 600; }
+  /* control panel */
+  .panel { background:var(--panel2); border:1px solid var(--line); border-radius:11px; padding:16px 18px; }
+  .ctrls { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px; }
+  label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+          color:var(--dim); margin-bottom:5px; }
+  input { background:#0b0e13; border:1px solid var(--line2); color:var(--ink); border-radius:7px;
+          padding:8px 10px; font-size:13px; font-family:inherit; width:100%; }
+  input:focus { outline:none; border-color:var(--busy); }
+  .row { display:flex; gap:9px; flex-wrap:wrap; align-items:center; margin-top:14px; }
+  button { background:var(--busy); color:#04121f; border:0; border-radius:7px; padding:9px 16px;
+           font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; }
+  button.ghost { background:transparent; color:var(--ink); border:1px solid var(--line2); }
+  button.go { background:var(--ok); color:#05210d; }
+  button:hover { filter:brightness(1.12); } button:disabled { opacity:.45; cursor:default; }
+  .out { font-size:12px; color:var(--dim); margin-top:11px; min-height:17px; }
 
-  /* activity feed */
-  .feed { display: flex; flex-direction: column; gap: 8px; }
-  .item { background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
-          padding: 11px 14px; font-size: 13px; }
-  .item .top { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
-  .who { font-weight: 600; }
-  .quote { color: var(--dim); font-style: italic; }
-  .pill { font-size: 10.5px; padding: 2px 8px; border-radius: 99px; white-space: nowrap;
-          border: 1px solid; font-weight: 600; letter-spacing: .02em; }
-  .p-delivered { color: var(--ok); border-color: #1d572c; background: #0d2814; }
-  .p-queued, .p-in_flight { color: var(--busy); border-color: #1c3b5c; background: #0c1b2b; }
-  .p-accepted { color: var(--acc); border-color: #40325c; background: #1a1330; }
-  .p-failed { color: var(--bad); border-color: #5c2321; background: #2a1211; }
-  .p-cancelled { color: var(--dimmer); border-color: var(--line); background: var(--panel2); }
-  .meta { color: var(--dimmer); font-size: 11.5px; margin-top: 5px; }
+  /* checkpoints */
+  .checks { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:11px; }
+  .chk { background:var(--panel); border:1px solid var(--line); border-left-width:3px;
+         border-radius:9px; padding:12px 14px; }
+  .chk.pass { border-left-color:var(--ok); } .chk.fail { border-left-color:var(--bad); }
+  .chk.pending { border-left-color:var(--line2); }
+  .chk .h { display:flex; justify-content:space-between; gap:10px; align-items:baseline; }
+  .chk .t { font-size:13.5px; font-weight:600; }
+  .chk .r { font-size:11.5px; color:var(--dimmer); margin-top:2px; }
+  .chk .d { font-size:12.5px; color:var(--dim); margin-top:7px; }
+  .badge { font-size:10px; font-weight:700; letter-spacing:.08em; padding:3px 8px;
+           border-radius:99px; border:1px solid; white-space:nowrap; }
+  .b-pass { color:var(--ok); border-color:#1d572c; background:#0d2814; }
+  .b-fail { color:var(--bad); border-color:#5c2321; background:#2a1211; }
+  .b-pending { color:var(--dimmer); border-color:var(--line2); background:var(--panel2); }
 
-  /* demo controls */
-  .demo { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
-          padding: 16px 18px; margin-top: 10px; }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  input { background: #0b0e13; border: 1px solid var(--line); color: var(--ink);
-          border-radius: 7px; padding: 8px 11px; font-size: 13px; font-family: inherit; }
-  input:focus { outline: none; border-color: var(--busy); }
-  #text { flex: 1 1 260px; } #user { width: 150px; } #tok { width: 150px; }
-  button { background: var(--busy); color: #04121f; border: 0; border-radius: 7px;
-           padding: 8px 15px; font-size: 13px; font-weight: 600; cursor: pointer;
-           font-family: inherit; }
-  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
-  button:hover { filter: brightness(1.1); } button:disabled { opacity: .5; cursor: default; }
-  .hint { font-size: 11.5px; color: var(--dimmer); margin-top: 9px; }
-  .alarm { background: #3d1418; border: 1px solid var(--bad); color: #ffb4ae;
-           border-radius: 10px; padding: 14px 18px; margin-bottom: 18px; font-size: 14px; }
-  .alarm b { color: var(--bad); }
-  footer { max-width: 1000px; margin: 44px auto 0; color: var(--dimmer); font-size: 12px; }
+  /* inbox */
+  .inboxes { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:11px; }
+  .ib { background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:12px 14px; }
+  .ib .who { display:flex; align-items:center; gap:9px; }
+  .av { width:30px; height:30px; border-radius:50%; flex:none; display:grid; place-items:center;
+        font-size:12px; font-weight:700; color:#0b0e13; }
+  .ib .name { font-weight:600; font-size:13.5px; }
+  .ib .cmt { font-size:12px; color:var(--dimmer); margin-top:1px; }
+  .bubble { background:#1d3a5c; border-radius:13px 13px 13px 4px; padding:9px 12px;
+            font-size:12.5px; margin-top:9px; color:#dceaff; }
+  .ib.pending .bubble { background:var(--panel2); color:var(--dim); }
+  .ib.cancelled .bubble { background:var(--panel2); color:var(--dimmer);
+                          text-decoration:line-through; }
+  .ib.failed .bubble { background:#2a1211; color:#ffb4ae; }
+  .tick { font-size:11px; margin-top:6px; display:flex; justify-content:space-between; gap:8px; }
+  .t-delivered{color:var(--ok)} .t-sending{color:var(--busy)} .t-pending{color:var(--dimmer)}
+  .t-failed{color:var(--bad)} .t-cancelled{color:var(--dimmer)}
+
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td { padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  td:last-child { text-align:right; font-variant-numeric:tabular-nums; color:var(--dim); }
+  .flag { color:var(--bad); font-weight:600; }
+  .alarm { background:#3d1418; border:1px solid var(--bad); color:#ffb4ae; border-radius:10px;
+           padding:14px 18px; margin-bottom:18px; font-size:14px; }
+  .alarm b { color:var(--bad); }
+  .feed { display:flex; flex-direction:column; gap:7px; }
+  .item { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:10px 13px; font-size:13px; }
+  .item .top { display:flex; justify-content:space-between; gap:12px; align-items:baseline; }
+  .quote { color:var(--dim); font-style:italic; }
+  .meta { color:var(--dimmer); font-size:11.5px; margin-top:4px; }
+  .pill { font-size:10.5px; padding:2px 8px; border-radius:99px; white-space:nowrap; border:1px solid; font-weight:600; }
+  .p-delivered{color:var(--ok);border-color:#1d572c;background:#0d2814}
+  .p-queued,.p-in_flight{color:var(--busy);border-color:#1c3b5c;background:#0c1b2b}
+  .p-accepted{color:var(--acc);border-color:#40325c;background:#1a1330}
+  .p-failed{color:var(--bad);border-color:#5c2321;background:#2a1211}
+  .p-cancelled{color:var(--dimmer);border-color:var(--line2);background:var(--panel2)}
+  footer { max-width:1120px; margin:44px auto 0; color:var(--dimmer); font-size:12px; }
 </style>
 </head>
 <body>
 <header>
   <h1>LinkPlease · comment → DM</h1>
-  <div class="sub">
-    A durable order book of people we owe a message to, worked by one clerk who is
-    only allowed to send <b>10 DMs per minute</b>. Every number below is a
-    <code>COUNT(*)</code> over rows in the database — nothing is counted in memory.
-  </div>
+  <div class="sub">A durable order book of people we owe a message to, worked by one clerk
+    allowed to send <b>10 DMs per minute</b>. Every number is a <code>COUNT(*)</code> over rows
+    in the database — nothing is counted in memory.</div>
 </header>
 
 <main>
@@ -98,14 +123,40 @@
 
   <div class="flow">
     <div class="step"><div class="n">1 · RECEIVE</div><div class="t">Write it down, then say OK</div>
-      <div class="d">Signature checked, event stored, <code>200</code> returned in milliseconds. No matching or sending on this path — so 500 events in 10s can't make us drop any.</div></div>
+      <div class="d">Signature checked, event stored, <code>200</code> returned. No matching or sending on this path, so a burst can't make us drop anything.</div></div>
     <div class="step"><div class="n">2 · DECIDE</div><div class="t">Who is owed a DM?</div>
-      <div class="d">Keyword match creates one obligation per (rule, person). It's a primary key, so the same person can't be owed twice — no matter how many times they comment.</div></div>
+      <div class="d">One obligation per (rule, person) — enforced by a primary key, so the same person can't be owed twice however often they comment.</div></div>
     <div class="step"><div class="n">3 · SEND</div><div class="t">One clerk, legal pace</div>
-      <div class="d">A slot is reserved in the database before every send, so the rate limit holds even with two copies of the app running.</div></div>
-    <div class="step"><div class="n">4 · CONFIRM</div><div class="t">Chase it until delivered</div>
-      <div class="d">"Accepted" isn't "delivered" — about 15% fail afterwards. We poll every one and resend the ones that failed.</div></div>
+      <div class="d">A slot is reserved in the database before every send, so the limit holds even with two copies of the app running.</div></div>
+    <div class="step"><div class="n">4 · CONFIRM</div><div class="t">Chase until delivered</div>
+      <div class="d">"Accepted" isn't "delivered" — ~15% fail afterwards. We poll every one and resend the failures.</div></div>
   </div>
+
+  <h2>Simulator <span class="n">— create accounts, flood the webhook, watch it hold</span></h2>
+  <div class="panel">
+    <div class="ctrls">
+      <div><label>Accounts</label><input id="accounts" type="number" value="50" min="1" max="1000"></div>
+      <div><label>Comments</label><input id="comments" type="number" value="500" min="1" max="5000"></div>
+      <div><label>Over seconds</label><input id="duration" type="number" value="10" min="1" max="600"></div>
+      <div><label>% with keyword</label><input id="matching" type="number" value="40" min="0" max="100"></div>
+      <div><label>% redelivered</label><input id="duplicate" type="number" value="8" min="0" max="100"></div>
+      <div><label>% deleted</label><input id="delete" type="number" value="5" min="0" max="100"></div>
+      <div><label>Demo token</label><input id="tok" type="password" placeholder="required"></div>
+    </div>
+    <div class="row">
+      <button id="flood" class="go">Flood the webhook</button>
+      <button id="single" class="ghost">Post one comment</button>
+      <button id="again" class="ghost">Post it again (duplicate)</button>
+      <button id="mkacc" class="ghost">Create accounts only</button>
+      <span style="flex:1"></span>
+      <button id="xlsx" class="ghost">⬇ Excel</button>
+      <button id="csv" class="ghost">⬇ CSV</button>
+    </div>
+    <div class="out" id="out">Token is saved in this browser only. Flooding spends the real API rate limit.</div>
+  </div>
+
+  <h2>Checkpoints <span class="n" id="cksum"></span></h2>
+  <div class="checks" id="checks"></div>
 
   <h2>The four graded numbers</h2>
   <div class="grid">
@@ -118,30 +169,11 @@
     <div class="card dupes"><div class="label">Duplicates blocked</div><div class="value" id="dupes">–</div>
       <div class="note">DMs we correctly did not send</div></div>
   </div>
-
   <div class="bar"><span id="drain" style="width:0%"></span></div>
   <div class="sub" id="drainlabel" style="margin-top:8px"></div>
 
-  <h2>Try it</h2>
-  <div class="demo">
-    <div class="row">
-      <input id="user" placeholder="username" value="arjun.shoots">
-      <input id="text" placeholder="comment text" value="PRICE please 🙏">
-      <button id="send">Post comment</button>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <button id="dupe" class="ghost">Post the same comment again</button>
-      <button id="burst" class="ghost">Fire 500 events in 10s</button>
-      <input id="tok" placeholder="demo token" type="password">
-    </div>
-    <div class="hint" id="demoout">
-      Post a comment containing a keyword and watch it appear below. Post it twice from the
-      same person and the second one is blocked, not sent.
-    </div>
-  </div>
-
-  <h2>Live activity <span class="sub">— one comment becoming one DM</span></h2>
-  <div class="feed" id="feed"></div>
+  <h2>Inboxes <span class="n" id="ibsum">— what each person actually received</span></h2>
+  <div class="inboxes" id="inboxes"></div>
 
   <h2>Duplicates we refused to send</h2>
   <div class="feed" id="blocked"></div>
@@ -152,95 +184,145 @@
   <h2>Pipeline</h2>
   <table><tbody id="pipeline"></tbody></table>
 
-  <h2>Invariants <span class="sub">(last 15 min — should stay at zero)</span></h2>
+  <h2>Invariants <span class="n">(last 15 min — should stay at zero)</span></h2>
   <table><tbody id="invariants"></tbody></table>
   <div class="sub" id="invhist" style="margin-top:10px"></div>
 </main>
 
-<footer>Refreshing every 2s · <code>GET /stats?verbose=1</code> · <code>GET /activity</code></footer>
+<footer>Refreshing every 2s · <code>/stats?verbose=1</code> · <code>/checkpoints</code> · <code>/inbox</code></footer>
 
 <script>
 const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
-  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const rows = (el, pairs) => el.innerHTML = pairs.map(([k, v, flag]) =>
-  `<tr><td>${k}</td><td class="${flag ? 'flag' : ''}">${v}</td></tr>`).join('');
-const ago = ts => {
-  const s = Date.now() / 1000 - ts;
-  return s < 60 ? `${Math.round(s)}s ago` : `${Math.round(s / 60)}m ago`;
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const rows = (el, pairs) => el.innerHTML = pairs.map(([k,v,f]) =>
+  `<tr><td>${k}</td><td class="${f?'flag':''}">${v}</td></tr>`).join('');
+const num = id => Math.max(0, parseInt($(id).value || '0', 10));
+const tok = () => encodeURIComponent($('tok').value.trim());
+const hue = s => { let h=0; for (const c of s) h=(h*31+c.charCodeAt(0))%360; return h; };
+
+$('tok').value = localStorage.getItem('lp_token') || '';
+$('tok').onchange = () => localStorage.setItem('lp_token', $('tok').value.trim());
+
+async function call(url, opts) {
+  const r = await fetch(url, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    $('out').textContent = r.status === 404 ? 'Demo controls are disabled (DEMO_TOKEN unset on the server).'
+      : r.status === 401 ? 'Wrong or missing demo token.' : 'Error: ' + JSON.stringify(j);
+    return null;
+  }
+  return j;
+}
+
+$('flood').onclick = async () => {
+  $('flood').disabled = true;
+  $('out').textContent = 'Building traffic…';
+  const q = new URLSearchParams({
+    accounts:num('accounts'), comments:num('comments'), duration_seconds:num('duration'),
+    pct_matching:num('matching'), pct_duplicate:num('duplicate'), pct_delete:num('delete'),
+    token:$('tok').value.trim(),
+  });
+  const j = await call('/demo/flood?' + q, {method:'POST'});
+  if (j) $('out').textContent =
+    `Flooding: ${j.deliveries} deliveries from ${j.accounts} accounts over ${j.duration_seconds}s ` +
+    `— ${j.matching_comments} mention a keyword, ${j.redeliveries} are redeliveries, ${j.deletes} are deletes.`;
+  setTimeout(() => $('flood').disabled = false, 2000);
+  tick();
 };
 
+let last = null;
+async function one(body) {
+  const j = await call('/demo/comment?token=' + tok(),
+    {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  if (j) $('out').textContent = `@${body.username}: “${body.text}” → webhook ${j.webhook_status} (${j.result?.status})`;
+  tick();
+}
+$('single').onclick = () => {
+  last = {text:'PRICE please 🙏', username:'arjun.shoots',
+          user_id:'usr_demo_' + Math.random().toString(36).slice(2,10)};
+  one(last);
+};
+$('again').onclick = () => last ? one({...last, text:"what's the pricing?"})
+                               : ($('out').textContent = 'Post one comment first.');
+$('mkacc').onclick = async () => {
+  const j = await call(`/demo/accounts?count=${num('accounts')}&token=${tok()}`, {method:'POST'});
+  if (j) $('out').textContent = `Created ${j.created} accounts (${j.total} total).`;
+};
+$('xlsx').onclick = () => location.href = '/export.xlsx';
+$('csv').onclick  = () => location.href = '/export.csv';
+
 async function tick() {
-  let s, a, b;
+  let s, c, ib, b;
   try {
-    [s, a, b] = await Promise.all([
-      fetch('/stats?verbose=1').then(r => r.json()),
-      fetch('/activity?limit=12').then(r => r.json()),
-      fetch('/activity/blocked?limit=6').then(r => r.json()),
+    [s, c, ib, b] = await Promise.all([
+      fetch('/stats?verbose=1').then(r=>r.json()),
+      fetch('/checkpoints').then(r=>r.json()),
+      fetch('/inbox?limit=12').then(r=>r.json()),
+      fetch('/activity/blocked?limit=5').then(r=>r.json()),
     ]);
-  } catch (e) { return; }
+  } catch(e) { return; }
 
-  $('sent').textContent = s.sent;
-  $('queued').textContent = s.queued;
-  $('failed').textContent = s.failed;
-  $('dupes').textContent = s.duplicates_blocked;
+  $('sent').textContent=s.sent; $('queued').textContent=s.queued;
+  $('failed').textContent=s.failed; $('dupes').textContent=s.duplicates_blocked;
 
-  const d = s.detail;
-  const alarm = $('alarm');
+  const d = s.detail, al = $('alarm');
   if (d.REJECTING_ALL_TRAFFIC) {
-    alarm.hidden = false;
-    alarm.innerHTML = `<b>REJECTING ALL TRAFFIC.</b> ${d.rejected_recent} request(s) rejected, ` +
-      `0 accepted in 15 min. Every other number here is honest and all of them look fine.`;
-  } else alarm.hidden = true;
+    al.hidden=false;
+    al.innerHTML = `<b>REJECTING ALL TRAFFIC.</b> ${d.rejected_recent} rejected, 0 accepted in 15 min. ` +
+      `Every other number here is honest and all of them look fine.`;
+  } else al.hidden = true;
 
-  const done = s.sent + s.failed + d.cancelled_by_delete;
-  const total = done + s.queued;
-  const pct = total ? (done / total) * 100 : 0;
-  $('drain').style.width = pct.toFixed(1) + '%';
+  const done = s.sent + s.failed + d.cancelled_by_delete, total = done + s.queued;
+  const pct = total ? done/total*100 : 0;
+  $('drain').style.width = pct.toFixed(1)+'%';
   $('drainlabel').textContent = total
     ? `${done} of ${total} obligations resolved (${pct.toFixed(0)}%)` +
-      (s.queued ? ` · ~${Math.ceil(s.queued * d.send_interval_seconds / 60)} min to drain at the rate limit` : '')
-    : 'No work yet — post a comment above.';
+      (s.queued ? ` · ~${Math.ceil(s.queued*d.send_interval_seconds/60)} min to drain at the rate limit` : '')
+    : 'No work yet — run the simulator above.';
 
-  // activity feed
-  $('feed').innerHTML = (a.activity || []).map(t => {
-    const last = t.trace && t.trace.length ? t.trace[t.trace.length - 1] : null;
+  const sm = c.summary;
+  $('cksum').textContent = `— ${sm.pass} pass · ${sm.fail} fail · ${sm.pending} not yet exercised`;
+  $('checks').innerHTML = c.checkpoints.map(k => `
+    <div class="chk ${k.state}">
+      <div class="h"><div><div class="t">${esc(k.title)}</div><div class="r">${esc(k.requirement)}</div></div>
+        <span class="badge b-${k.state}">${k.state.toUpperCase()}</span></div>
+      <div class="d">${esc(k.detail)}</div>
+    </div>`).join('');
+
+  $('ibsum').textContent = `— ${ib.people} people, what each actually received`;
+  $('inboxes').innerHTML = (ib.inboxes||[]).map(m => {
+    const initials = (m.username||'?').replace(/[^a-zA-Z]/g,' ').trim().split(/\s+/)
+      .slice(0,2).map(w=>w[0]).join('').toUpperCase() || '?';
     const extra = [];
-    if (t.attempts > 1) extra.push(`${t.attempts} attempts`);
-    if (t.resend_count) extra.push(`${t.resend_count} resend after failed delivery`);
-    if (t.seconds_to_resolve !== null) extra.push(`${t.seconds_to_resolve}s end to end`);
-    if (t.dm_id) extra.push(t.dm_id);
-    return `<div class="item">
-      <div class="top">
-        <div><span class="who">@${esc(t.username || t.user_id)}</span>
-          <span class="quote">“${esc(t.comment_text || '')}”</span></div>
-        <span class="pill p-${t.state}">${esc(t.label)}</span>
+    if (m.attempts > 1) extra.push(`${m.attempts} attempts`);
+    if (m.resends) extra.push(`${m.resends} resend`);
+    return `<div class="ib ${m.status}">
+      <div class="who">
+        <div class="av" style="background:hsl(${hue(m.username)},55%,62%)">${esc(initials)}</div>
+        <div><div class="name">@${esc(m.username)}</div>
+             <div class="cmt">“${esc(m.comment||'')}”</div></div>
       </div>
-      <div class="meta">matched <code>${esc(t.keyword || '?')}</code>
-        ${last ? '· ' + esc(last.detail || '') : ''}
-        ${extra.length ? '· ' + esc(extra.join(' · ')) : ''}</div>
+      <div class="bubble">${esc(m.message)}</div>
+      <div class="tick"><span class="t-${m.status}">${esc(m.status_label)}</span>
+        <span>${extra.join(' · ')}${extra.length?' · ':''}${m.waited_seconds}s</span></div>
     </div>`;
-  }).join('') || '<div class="item sub">Nothing yet.</div>';
+  }).join('') || '<div class="item sub">No DMs yet — run the simulator.</div>';
 
-  $('blocked').innerHTML = (b.blocked || []).map(x => `<div class="item">
-      <div class="top">
-        <div><span class="who">@${esc(x.username || x.user_id)}</span>
-          <span class="quote">“${esc(x.text || '')}”</span></div>
-        <span class="pill p-cancelled">blocked</span>
-      </div>
-      <div class="meta">${esc(x.reason)} · ${ago(x.at)}</div>
-    </div>`).join('') || '<div class="item sub">None yet — post the same comment twice.</div>';
+  $('blocked').innerHTML = (b.blocked||[]).map(x => `<div class="item">
+      <div class="top"><div><b>@${esc(x.username||x.user_id)}</b>
+        <span class="quote">“${esc(x.text||'')}”</span></div>
+        <span class="pill p-cancelled">blocked</span></div>
+      <div class="meta">${esc(x.reason)}</div></div>`).join('')
+    || '<div class="item sub">None yet — post the same comment twice.</div>';
 
   const since = d.seconds_since_last_event;
   rows($('rate'), [
-    ['Last event received', since === null ? 'never' : since < 90
-      ? `${Math.round(since)}s ago` : `${Math.round(since / 60)} min ago`],
+    ['Last event received', since===null?'never':since<90?`${Math.round(since)}s ago`:`${Math.round(since/60)} min ago`],
     ['Sends in the last 60s', `${d.sends_last_60s} / 10 allowed`],
     ['Total send requests issued', d.sends_total],
-    ['Pacing interval', d.send_interval_seconds + 's'],
+    ['Pacing interval', d.send_interval_seconds+'s'],
     ['Resends after a failed delivery', d.resends_issued],
   ]);
-
   rows($('pipeline'), [
     ['Distinct events received', d.events_distinct],
     ['Total deliveries (incl. redeliveries)', d.event_deliveries],
@@ -250,48 +332,11 @@ async function tick() {
     ['Suppressed — comment already deleted', d.suppressed_deleted],
     ['Rules', d.rules],
   ]);
-
-  const recent = Object.entries(d.invariants_recent || {});
-  rows($('invariants'), recent.length ? recent.map(([k, v]) => [k, v, true])
-    : [['nothing in the last 15 min', '0']]);
-  const all = Object.entries(d.invariants || {});
-  $('invhist').textContent = all.length
-    ? 'All time: ' + all.map(([k, v]) => `${k} ${v}`).join(' · ') : '';
+  const rec = Object.entries(d.invariants_recent||{});
+  rows($('invariants'), rec.length ? rec.map(([k,v])=>[k,v,true]) : [['nothing in the last 15 min','0']]);
+  const all = Object.entries(d.invariants||{});
+  $('invhist').textContent = all.length ? 'All time: '+all.map(([k,v])=>`${k} ${v}`).join(' · ') : '';
 }
-
-let lastDemo = null;
-async function post(body) {
-  const token = encodeURIComponent($('tok').value.trim());
-  const r = await fetch('/demo/comment?token=' + token, {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
-  });
-  const j = await r.json().catch(() => ({}));
-  $('demoout').textContent = r.ok
-    ? `Sent as ${j.user_id} → webhook ${j.webhook_status}, ${j.result?.status}`
-    : (r.status === 404 ? 'Demo endpoints are disabled (DEMO_TOKEN unset).'
-       : r.status === 401 ? 'Wrong demo token.' : 'Error: ' + JSON.stringify(j));
-  tick();
-}
-
-$('send').onclick = () => {
-  lastDemo = {text: $('text').value, username: $('user').value,
-              user_id: 'usr_demo_' + Math.random().toString(36).slice(2, 10)};
-  post(lastDemo);
-};
-$('dupe').onclick = () => lastDemo
-  ? post(lastDemo)                       // same user_id -> blocked as a duplicate
-  : ($('demoout').textContent = 'Post a comment first.');
-$('burst').onclick = async () => {
-  const token = encodeURIComponent($('tok').value.trim());
-  $('demoout').textContent = 'Firing 500 events over 10 seconds…';
-  const r = await fetch('/admin/simulate?count=500&duration_seconds=10&token=' + token,
-                        {method: 'POST'});
-  const j = await r.json().catch(() => ({}));
-  $('demoout').textContent = r.ok
-    ? `500 events firing. Watch Queued spike, then drain at 10/min.`
-    : 'Error: ' + JSON.stringify(j);
-};
-
 tick(); setInterval(tick, 2000);
 </script>
 </body>

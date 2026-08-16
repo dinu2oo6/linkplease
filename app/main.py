@@ -19,8 +19,8 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from . import (activity, audit, config, db, ingest, keepalive, matcher,
-               reconciler, sender, stats, webhook)
+from . import (activity, audit, checkpoints, config, db, export, inbox, ingest,
+               keepalive, matcher, reconciler, sender, simulator, stats, webhook)
 
 STARTED_AT = time.time()
 log = logging.getLogger("linkplease")
@@ -93,6 +93,7 @@ async def receive_webhook(
     the event up from the database, so a slow or angry PseudoGram can never
     push us past the 5 second budget and make us drop events.
     """
+    started = time.perf_counter()
     raw = await request.body()
 
     if not webhook.verify_signature(raw, x_pseudogram_signature):
@@ -116,6 +117,9 @@ async def receive_webhook(
     # Batched: this waits for the group's INSERT to commit, then returns. We
     # batch the write, we never defer it -- nothing is acknowledged from memory.
     status = await ingest.submit(payload)
+    # Measured, so "answers within 5 seconds" is a checkpoint with a number
+    # behind it rather than an assurance.
+    ingest.record_latency((time.perf_counter() - started) * 1000.0)
     return {"status": status}
 
 
@@ -237,6 +241,91 @@ async def demo_comment(comment: DemoComment, token: str | None = None):
         )
     return {"webhook_status": resp.status_code, "result": resp.json(),
             "user_id": user_id, "text": comment.text}
+
+
+@app.post("/demo/accounts")
+def demo_accounts(count: int = 10, token: str | None = None):
+    _require_demo_token(token)
+    made = simulator.create_accounts(max(1, min(count, 1000)))
+    return {"created": len(made), "accounts": made[:20],
+            "total": db.scalar("SELECT COUNT(*) FROM demo_accounts")}
+
+
+@app.get("/demo/accounts")
+def list_demo_accounts(limit: int = 200):
+    return {"accounts": simulator.list_accounts(limit),
+            "total": db.scalar("SELECT COUNT(*) FROM demo_accounts")}
+
+
+@app.post("/demo/flood")
+async def demo_flood(accounts: int = 50, comments: int = 500,
+                     duration_seconds: float = 10, pct_matching: int = 40,
+                     pct_duplicate: int = 8, pct_delete: int = 5,
+                     token: str | None = None):
+    """Flood the webhook with realistic traffic from N accounts.
+
+    Signed and delivered over HTTP to our own /webhook, so this exercises the
+    whole pipeline rather than a shortcut into it.
+    """
+    _require_demo_token(token)
+    info, deliveries = await asyncio.to_thread(
+        simulator.prepare_flood,
+        max(1, min(accounts, 1000)),
+        max(1, min(comments, 5000)),
+        max(0.5, min(duration_seconds, 600)),
+        max(0, min(pct_matching, 100)),
+        max(0, min(pct_duplicate, 100)),
+        max(0, min(pct_delete, 100)),
+    )
+    if deliveries:
+        # Scheduled here, on the event loop, and deliberately not awaited: the
+        # flood outlives this request by design.
+        asyncio.create_task(simulator.run_flood(
+            info["run_id"], deliveries, info["duration_seconds"],
+            info["forged_requests"]))
+    return info
+
+
+@app.get("/demo/run")
+def demo_run():
+    return {"run": simulator.latest_run()}
+
+
+@app.get("/checkpoints")
+def get_checkpoints():
+    """Every guarantee the brief asks for, evaluated against the ledger."""
+    return checkpoints.all_checkpoints()
+
+
+@app.get("/inbox")
+def get_inbox(limit: int = 40, state: str | None = None):
+    """What each person received, from their side."""
+    return inbox.inboxes(limit, state)
+
+
+@app.get("/export.xlsx")
+def export_xlsx():
+    data = export.to_xlsx()
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    if data is None:                       # openpyxl unavailable
+        return Response(
+            content=export.to_csv(), media_type="text/csv",
+            headers={"Content-Disposition":
+                     f'attachment; filename="linkplease-{stamp}.csv"'})
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":
+                 f'attachment; filename="linkplease-{stamp}.xlsx"'})
+
+
+@app.get("/export.csv")
+def export_csv():
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    return Response(
+        content=export.to_csv(), media_type="text/csv",
+        headers={"Content-Disposition":
+                 f'attachment; filename="linkplease-{stamp}.csv"'})
 
 
 @app.get("/activity")

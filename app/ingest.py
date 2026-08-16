@@ -93,6 +93,45 @@ def write_batch(payloads: list[dict]) -> list[str]:
     return [r or "ignored" for r in results]
 
 
+_latency_buffer: list[float] = []
+
+
+def record_latency(ms: float) -> None:
+    """Buffer webhook acknowledgement times, flushed in batches.
+
+    Writing a row per request would double the database work on the hot path --
+    the exact thing the batching above exists to avoid. Buffered in memory and
+    flushed every 50 samples: losing a few timing rows on a crash costs nothing,
+    since they are diagnostics, not the ledger.
+    """
+    _latency_buffer.append(ms)
+    if len(_latency_buffer) < 50:
+        return
+    batch, _latency_buffer[:] = list(_latency_buffer), []
+    now = time.time()
+    try:
+        with db.tx() as conn:
+            for value in batch:
+                conn.execute("INSERT INTO webhook_timing (ts, ms) VALUES (?, ?)",
+                             (now, value))
+    except Exception:
+        pass
+
+
+def flush_latency() -> None:
+    if not _latency_buffer:
+        return
+    batch, _latency_buffer[:] = list(_latency_buffer), []
+    now = time.time()
+    try:
+        with db.tx() as conn:
+            for value in batch:
+                conn.execute("INSERT INTO webhook_timing (ts, ms) VALUES (?, ?)",
+                             (now, value))
+    except Exception:
+        pass
+
+
 async def submit(payload: dict) -> str:
     """Hand one event to the batch writer and wait for its commit."""
     if _queue is None:                     # batcher not running (tests)
@@ -139,5 +178,9 @@ async def batcher_loop(stop: asyncio.Event) -> None:
             for (_, future), result in zip(batch, results):
                 if not future.done():
                     future.set_result(result)
+
+            # Idle moment: get the buffered timings on disk.
+            if _queue is not None and _queue.empty():
+                await asyncio.to_thread(flush_latency)
     finally:
         _queue = None

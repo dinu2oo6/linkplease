@@ -156,6 +156,37 @@ CREATE TABLE IF NOT EXISTS sim_runs (
     count       INTEGER,
     duration    INTEGER
 );
+
+-- Synthetic commenters for the demo simulator.
+CREATE TABLE IF NOT EXISTS demo_accounts (
+    user_id     TEXT PRIMARY KEY,
+    username    TEXT NOT NULL,
+    created_at  REAL NOT NULL
+);
+
+-- How long /webhook took to acknowledge, so the 5-second budget is a measured
+-- checkpoint rather than a claim.
+CREATE TABLE IF NOT EXISTS webhook_timing (
+    id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts  REAL NOT NULL,
+    ms  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_timing ON webhook_timing (ts);
+
+-- One row per demo flood, holding what we injected so checkpoints can compare
+-- what we sent against what the pipeline recorded.
+CREATE TABLE IF NOT EXISTS demo_runs (
+    run_id        TEXT PRIMARY KEY,
+    started_at    REAL NOT NULL,
+    finished_at   REAL,
+    accounts      INTEGER,
+    comments      INTEGER,
+    duplicates    INTEGER,
+    deletes       INTEGER,
+    matching      INTEGER,
+    duration      REAL,
+    status        TEXT
+);
 """
 
 _conn = None
@@ -334,8 +365,9 @@ def reset_for_tests() -> None:
         _conn = None
 
 
-TABLES = ["sim_runs", "invariants", "send_log", "dm_events", "match_decisions",
-          "dm_tasks", "tombstones", "comments", "events", "rules"]
+TABLES = ["demo_runs", "webhook_timing", "demo_accounts", "sim_runs", "invariants",
+          "send_log", "dm_events", "match_decisions", "dm_tasks", "tombstones",
+          "comments", "events", "rules"]
 
 
 def drop_all() -> None:
